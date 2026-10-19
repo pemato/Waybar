@@ -65,6 +65,26 @@ Addressed by *wlr/taskbar*
 	If set to true, only the currently active application button is shown.
 	Other applications remain tracked and reappear when activated.
 
+*group-by-workspace*: ++
+	typeof: bool ++
+	default: false ++
+	If set to true, task buttons are arranged in one box per workspace, each
+	headed by a clickable workspace label, followed by a trailing "other" box
+	for applications whose workspace is unknown. Clicking a workspace label
+	switches to that workspace. All boxes get an equal share of the module's
+	width (or height on a vertical bar). In this mode the module expands to
+	fill the space of its bar section, so the *expand-left*, *expand-right* and
+	*expand-center* bar options influence the space available. Combining this
+	option with *expand* is not specifically supported; buttons may stretch
+	within their boxes. Requires *ext-workspace-v1* for workspace boxes. See
+	*Workspace membership* below.
+
+*other-apps-label*: ++
+	typeof: string ++
+	default: other ++
+	The label of the trailing box holding applications whose workspace is
+	unknown. Only used with *group-by-workspace*.
+
 *sort-by-app-id*: ++
 	typeof: bool ++
 	default: false ++
@@ -201,6 +221,24 @@ Invalid expressions (e.g., mismatched parentheses) are skipped.
 - *#taskbar button.active*
 - *#taskbar button.fullscreen*
 
+With *group-by-workspace*:
+
+- *#taskbar .workspace*: the box of one workspace
+- *#taskbar .workspace.active*: the box of the active workspace
+- *#taskbar .workspace.empty*: a box with no task buttons. The trailing
+  "other" box is also marked *empty* when it has no buttons. A box whose only
+  buttons are hidden by *active-only* is not marked *empty*.
+- *#taskbar .workspace.other*: the trailing box of applications with unknown workspace
+- *#taskbar .workspace-label*: the clickable workspace label
+
+# Workspace membership
+
+Which workspace an application belongs to is determined as follows. On labwc
+the membership is exact, reported through the *lab-toplevel-workspace-v1*
+protocol. On other compositors it is learned when an application is activated
+(this requires *ext-workspace-v1*). Applications whose workspace is not known
+appear in the "other" box.
+
 # Bar state style
 
 When *bar-css-states* is enabled, the following classes are added to
@@ -215,11 +253,12 @@ The active, minimized classes describe the active application. The maximized
 and fullscreen classes are set if any non-minimized application known to belong
 to the active workspace has that state.
 
-Workspace membership is learned when an application is activated and requires
-the compositor to support *ext-workspace-v1*. Before an application has been
-activated during the current Waybar session, its workspace may be unknown. On
-compositors without *ext-workspace-v1*, these classes fall back to the active
-application's state.
+Workspace membership is exact on labwc (see *Workspace membership* above). On
+other compositors it is learned when an application is activated and requires
+*ext-workspace-v1*, so before an application has been activated during the
+current Waybar session its workspace may be unknown. On compositors without
+workspace information, these classes fall back to the active application's
+state.
 
 For example:
 
