@@ -237,6 +237,7 @@ void Task::bind_workspace_object() {
 }
 
 void Task::handle_workspace_enter(const char* id) {
+  spdlog::debug("{} entered workspace '{}'", repr(), id);
   workspace_id_ = id;
   workspace_ = tbar_->handle_for_id(workspace_id_);
   tbar_->place_task(*this);
@@ -245,6 +246,7 @@ void Task::handle_workspace_enter(const char* id) {
 }
 
 void Task::handle_workspace_leave(const char* id) {
+  spdlog::debug("{} left workspace '{}'", repr(), id);
   if (workspace_id_ == id) {
     workspace_id_.clear();
     workspace_ = nullptr;
