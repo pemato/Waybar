@@ -72,9 +72,11 @@ Addressed by *wlr/taskbar*
 	headed by a clickable workspace label, followed by a trailing "other" box
 	for applications whose workspace is unknown. Clicking a workspace label
 	switches to that workspace. All boxes get an equal share of the module's
-	width (or height on a vertical bar). In this mode the module expands to
-	fill the space of its bar section, so the *expand-left*, *expand-right* and
-	*expand-center* bar options influence the space available. Combining this
+	width (or height on a vertical bar). In this mode the module requests
+	horizontal expansion, but the bar only gives it extra space when one of the
+	bar's *expand-left*, *expand-center* or *expand-right* options is set for
+	its section; on a vertical bar the same applies to the height. Clicking the
+	"other" label does nothing. Combining this
 	option with *expand* is not specifically supported; buttons may stretch
 	within their boxes. Requires *ext-workspace-v1* for workspace boxes. See
 	*Workspace membership* below.
