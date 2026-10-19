@@ -1183,8 +1183,17 @@ void Taskbar::handle_workspace_removed(struct ext_workspace_handle_v1* handle) {
       std::find_if(workspaces_.begin(), workspaces_.end(),
                    [handle](const auto& workspace) { return workspace->handle == handle; });
   if (workspace != workspaces_.end()) {
-    if ((*workspace)->group) {
-      box_.remove((*workspace)->group->box);
+    if (auto& group = (*workspace)->group) {
+      // Never destroy a button together with the box, even if two handles share an id.
+      if (other_group_) {
+        for (auto* child : group->box.get_children()) {
+          if (child == &group->label) continue;
+          group->box.remove(*child);
+          other_group_->box.pack_start(*child, false, false);
+        }
+        refresh_empty_classes();
+      }
+      box_.remove(group->box);
     }
     ext_workspace_handle_v1_destroy((*workspace)->handle);
     workspaces_.erase(workspace);
