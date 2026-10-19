@@ -163,6 +163,14 @@ using TaskPtr = std::unique_ptr<Task>;
 
 class Taskbar : public waybar::AModule {
  public:
+  /* One box of the "group-by-workspace" view: a label followed by task buttons.
+   * The buttons are owned by their Task, never by the group. */
+  struct Group {
+    explicit Group(Gtk::Orientation orientation) : box{orientation, 0} {}
+    Gtk::Box box;
+    Gtk::Button label;
+  };
+
   struct WorkspaceState {
     Taskbar* taskbar;
     struct ext_workspace_handle_v1* handle;
@@ -170,6 +178,7 @@ class Taskbar : public waybar::AModule {
     std::string id;
     std::string name;
     std::vector<uint32_t> coordinates;
+    std::unique_ptr<Group> group;
   };
 
   Taskbar(const std::string&, const waybar::Bar&, const Json::Value&);
@@ -194,6 +203,10 @@ class Taskbar : public waybar::AModule {
   std::vector<std::unique_ptr<WorkspaceState>> workspaces_;
   struct ext_workspace_handle_v1* current_workspace_ = nullptr;
 
+  bool group_by_workspace_ = false;
+  std::string other_label_;
+  std::unique_ptr<Group> other_group_;
+
  public:
   /* Callbacks for global registration */
   void register_manager(struct wl_registry*, uint32_t name, uint32_t version);
@@ -212,10 +225,13 @@ class Taskbar : public waybar::AModule {
   void handle_workspace_removed(struct ext_workspace_handle_v1*);
 
  public:
-  void add_button(Gtk::Button&);
-  void move_button(Gtk::Button&, int);
+  void add_button(Task&);
+  void move_button(Task&, int);
   bool reorder_task(uint32_t dragged_id, uint32_t destination_id);
-  void remove_button(Gtk::Button&);
+  void remove_button(Task&);
+  Gtk::Box& container_for(const Task&);
+  void place_task(Task&);
+  void rebuild_groups();
   void remove_task(uint32_t);
   void assign_current_workspace(Task&);
   void update_bar_css_classes();
@@ -241,6 +257,9 @@ class Taskbar : public waybar::AModule {
 
  private:
   void set_bar_css_class(const std::string&, bool);
+  void pack_button(Task&);
+  void refresh_empty_classes();
+  std::vector<WorkspaceState*> ordered_grouped_workspaces() const;
 };
 
 } /* namespace waybar::modules::wlr */
