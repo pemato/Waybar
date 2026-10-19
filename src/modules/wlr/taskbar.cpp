@@ -92,6 +92,7 @@ Task::Task(const waybar::Bar& bar, const Json::Value& config, Taskbar* tbar,
       id_{global_id++},
       content_{bar.orientation, 0} {
   zwlr_foreign_toplevel_handle_v1_add_listener(handle_, &toplevel_handle_impl, this);
+  bind_workspace_object();
 
   button.set_relief(Gtk::RELIEF_NONE);
 
@@ -212,7 +213,49 @@ Task::Task(const waybar::Bar& bar, const Json::Value& config, Taskbar* tbar,
   });
 }
 
+static void lab_ws_enter(void* data, struct lab_toplevel_workspace_v1*, const char* id) {
+  static_cast<Task*>(data)->handle_workspace_enter(id);
+}
+
+static void lab_ws_leave(void* data, struct lab_toplevel_workspace_v1*, const char* id) {
+  static_cast<Task*>(data)->handle_workspace_leave(id);
+}
+
+static const struct lab_toplevel_workspace_v1_listener lab_toplevel_workspace_impl = {
+    .workspace_enter = lab_ws_enter,
+    .workspace_leave = lab_ws_leave,
+};
+
+void Task::bind_workspace_object() {
+  auto* mgr = tbar_->toplevel_workspace_manager();
+  if (workspace_obj_ || !mgr || !handle_) {
+    return;
+  }
+  workspace_obj_ = lab_toplevel_workspace_manager_v1_get_toplevel_workspace(mgr, handle_);
+  lab_toplevel_workspace_v1_add_listener(workspace_obj_, &lab_toplevel_workspace_impl, this);
+}
+
+void Task::handle_workspace_enter(const char* id) {
+  workspace_id_ = id;
+  workspace_ = tbar_->handle_for_id(workspace_id_);
+  tbar_->update_bar_css_classes();
+  tbar_->dp.emit();
+}
+
+void Task::handle_workspace_leave(const char* id) {
+  if (workspace_id_ == id) {
+    workspace_id_.clear();
+    workspace_ = nullptr;
+  }
+  tbar_->update_bar_css_classes();
+  tbar_->dp.emit();
+}
+
 Task::~Task() {
+  if (workspace_obj_) {
+    lab_toplevel_workspace_v1_destroy(workspace_obj_);
+    workspace_obj_ = nullptr;
+  }
   if (handle_) {
     zwlr_foreign_toplevel_handle_v1_destroy(handle_);
     handle_ = nullptr;
@@ -466,7 +509,7 @@ void Task::handle_done() {
     }
   }
 
-  if (active()) {
+  if (active() && !tbar_->has_exact_workspaces()) {
     tbar_->assign_current_workspace(*this);
   }
 
@@ -686,6 +729,8 @@ static void handle_global(void* data, struct wl_registry* registry, uint32_t nam
     static_cast<Taskbar*>(data)->register_manager(registry, name, version);
   } else if (std::strcmp(interface, ext_workspace_manager_v1_interface.name) == 0) {
     static_cast<Taskbar*>(data)->register_workspace_manager(registry, name, version);
+  } else if (std::strcmp(interface, lab_toplevel_workspace_manager_v1_interface.name) == 0) {
+    static_cast<Taskbar*>(data)->register_toplevel_workspace_manager(registry, name, version);
   } else if (std::strcmp(interface, wl_seat_interface.name) == 0) {
     static_cast<Taskbar*>(data)->register_seat(registry, name, version);
   }
@@ -787,6 +832,11 @@ Taskbar::Taskbar(const std::string& id, const waybar::Bar& bar, const Json::Valu
 }
 
 Taskbar::~Taskbar() {
+  tasks_.clear();
+  if (toplevel_workspace_manager_) {
+    lab_toplevel_workspace_manager_v1_destroy(toplevel_workspace_manager_);
+    toplevel_workspace_manager_ = nullptr;
+  }
   for (auto& workspace : workspaces_) {
     ext_workspace_handle_v1_destroy(workspace->handle);
   }
@@ -866,9 +916,20 @@ static const struct zwlr_foreign_toplevel_manager_v1_listener toplevel_manager_i
     .finished = tm_handle_finished,
 };
 
-static void workspace_handle_id(void*, struct ext_workspace_handle_v1*, const char*) {}
-static void workspace_handle_name(void*, struct ext_workspace_handle_v1*, const char*) {}
-static void workspace_handle_coordinates(void*, struct ext_workspace_handle_v1*, struct wl_array*) {
+static void workspace_handle_id(void* data, struct ext_workspace_handle_v1*, const char* id) {
+  static_cast<Taskbar::WorkspaceState*>(data)->id = id;
+}
+
+static void workspace_handle_name(void* data, struct ext_workspace_handle_v1*, const char* name) {
+  static_cast<Taskbar::WorkspaceState*>(data)->name = name;
+}
+
+static void workspace_handle_coordinates(void* data, struct ext_workspace_handle_v1*,
+                                         struct wl_array* coordinates) {
+  auto* ws = static_cast<Taskbar::WorkspaceState*>(data);
+  ws->coordinates.clear();
+  const auto* begin = static_cast<const uint32_t*>(coordinates->data);
+  ws->coordinates.assign(begin, begin + coordinates->size / sizeof(uint32_t));
 }
 
 static void workspace_handle_state(void* data, struct ext_workspace_handle_v1*, uint32_t state) {
@@ -976,6 +1037,29 @@ void Taskbar::register_workspace_manager(struct wl_registry* registry, uint32_t 
   ext_workspace_manager_v1_add_listener(workspace_manager_, &workspace_manager_impl, this);
 }
 
+void Taskbar::register_toplevel_workspace_manager(struct wl_registry* registry, uint32_t name,
+                                                  uint32_t version) {
+  if (toplevel_workspace_manager_) {
+    return;
+  }
+
+  (void)version;
+  toplevel_workspace_manager_ = static_cast<struct lab_toplevel_workspace_manager_v1*>(
+      wl_registry_bind(registry, name, &lab_toplevel_workspace_manager_v1_interface, 1));
+  for (auto& task : tasks_) {
+    task->bind_workspace_object();
+  }
+}
+
+struct ext_workspace_handle_v1* Taskbar::handle_for_id(const std::string& id) const {
+  for (const auto& workspace : workspaces_) {
+    if (workspace->id == id) {
+      return workspace->handle;
+    }
+  }
+  return nullptr;
+}
+
 void Taskbar::register_seat(struct wl_registry* registry, uint32_t name, uint32_t version) {
   if (seat_) {
     spdlog::warn("Register seat again although already existing!");
@@ -1021,7 +1105,12 @@ void Taskbar::handle_workspace_done() {
       });
   current_workspace_ =
       active_workspace == workspaces_.end() ? nullptr : (*active_workspace)->handle;
-  if (current_workspace_) {
+  for (auto& task : tasks_) {
+    if (!task->workspace_id().empty() && !task->workspace()) {
+      task->set_workspace(handle_for_id(task->workspace_id()));
+    }
+  }
+  if (current_workspace_ && !has_exact_workspaces()) {
     const auto active_task =
         std::find_if(tasks_.begin(), tasks_.end(), [](const auto& task) { return task->active(); });
     if (active_task != tasks_.end()) {

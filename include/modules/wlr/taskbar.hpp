@@ -20,6 +20,7 @@
 #include "bar.hpp"
 #include "client.hpp"
 #include "ext-workspace-v1-client-protocol.h"
+#include "lab-toplevel-workspace-v1-client-protocol.h"
 #include "giomm/desktopappinfo.h"
 #include "util/icon_loader.hpp"
 #include "util/json.hpp"
@@ -88,6 +89,8 @@ class Task {
   std::string app_id_;
   uint32_t state_ = 0;
   struct ext_workspace_handle_v1* workspace_ = nullptr;
+  struct lab_toplevel_workspace_v1* workspace_obj_ = nullptr;
+  std::string workspace_id_;
 
   int32_t drag_start_x;
   int32_t drag_start_y;
@@ -116,6 +119,10 @@ class Task {
   bool visible() const { return button_visible_; }
   struct ext_workspace_handle_v1* workspace() const { return workspace_; }
   void set_workspace(struct ext_workspace_handle_v1* workspace) { workspace_ = workspace; }
+  const std::string& workspace_id() const { return workspace_id_; }
+  void bind_workspace_object();
+  void handle_workspace_enter(const char* id);
+  void handle_workspace_leave(const char* id);
 
  public:
   /* Callbacks for the wlr protocol */
@@ -160,6 +167,9 @@ class Taskbar : public waybar::AModule {
     Taskbar* taskbar;
     struct ext_workspace_handle_v1* handle;
     uint32_t state = 0;
+    std::string id;
+    std::string name;
+    std::vector<uint32_t> coordinates;
   };
 
   Taskbar(const std::string&, const waybar::Bar&, const Json::Value&);
@@ -178,6 +188,7 @@ class Taskbar : public waybar::AModule {
 
   struct zwlr_foreign_toplevel_manager_v1* manager_;
   struct ext_workspace_manager_v1* workspace_manager_;
+  struct lab_toplevel_workspace_manager_v1* toplevel_workspace_manager_ = nullptr;
   struct wl_seat* seat_;
   std::vector<struct ext_workspace_group_handle_v1*> workspace_groups_;
   std::vector<std::unique_ptr<WorkspaceState>> workspaces_;
@@ -187,6 +198,7 @@ class Taskbar : public waybar::AModule {
   /* Callbacks for global registration */
   void register_manager(struct wl_registry*, uint32_t name, uint32_t version);
   void register_workspace_manager(struct wl_registry*, uint32_t name, uint32_t version);
+  void register_toplevel_workspace_manager(struct wl_registry*, uint32_t name, uint32_t version);
   void register_seat(struct wl_registry*, uint32_t name, uint32_t version);
 
   /* Callbacks for the wlr protocol */
@@ -207,6 +219,11 @@ class Taskbar : public waybar::AModule {
   void remove_task(uint32_t);
   void assign_current_workspace(Task&);
   void update_bar_css_classes();
+  struct lab_toplevel_workspace_manager_v1* toplevel_workspace_manager() const {
+    return toplevel_workspace_manager_;
+  }
+  bool has_exact_workspaces() const { return toplevel_workspace_manager_ != nullptr; }
+  struct ext_workspace_handle_v1* handle_for_id(const std::string& id) const;
 
   bool show_output(struct wl_output*) const;
   bool all_outputs() const;

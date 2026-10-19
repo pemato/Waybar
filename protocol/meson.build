@@ -34,7 +34,8 @@ client_protocols = [
 
 if wayland_protos.version().version_compare('>=1.39')
     client_protocols += [
-        [wl_protocol_dir, 'staging/ext-workspace/ext-workspace-v1.xml']
+        [wl_protocol_dir, 'staging/ext-workspace/ext-workspace-v1.xml'],
+        ['lab-toplevel-workspace-v1.xml'],
     ]
 endif
 
