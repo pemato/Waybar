@@ -81,7 +81,11 @@ Addressed by *wlr/taskbar*
 	switches to that workspace, as does clicking the empty area of a box. All
 	boxes get an equal share of the module's width (or height on a vertical
 	bar) regardless of their contents; buttons that do not fit are clipped at
-	the box edge (see *min-icon-size*). In this mode the module requests
+	the box edge (see *min-icon-size*). On labwc (protocol version 2) a task
+	button can be dragged onto another workspace's box, or onto a button in
+	it, to move that window there; the active workspace does not change.
+	Dropping on the "other" box does nothing. Within one box dragging still
+	reorders. In this mode the module requests
 	horizontal expansion, but the bar only gives it extra space when one of the
 	bar's *expand-left*, *expand-center* or *expand-right* options is set for
 	its section; on a vertical bar the same applies to the height. Clicking the
@@ -256,7 +260,8 @@ Which workspace an application belongs to is determined as follows. On labwc
 the membership is exact, reported through the *lab-toplevel-workspace-v1*
 protocol. On other compositors it is learned when an application is activated
 (this requires *ext-workspace-v1*). Applications whose workspace is not known
-appear in the "other" box.
+appear in the "other" box. On labwc, dragging a button to another workspace's box
+moves the window; the box follows once labwc reports the new workspace.
 
 # Bar state style
 

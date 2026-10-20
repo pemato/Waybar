@@ -644,9 +644,22 @@ void Task::handle_drag_data_received(const Glib::RefPtr<Gdk::DragContext>& conte
     return;
   }
 
-  if (!tbar_->reorder_task(*dragged_id, id_)) {
+  /* In the grouped view a drop onto a button of another box moves the window there. */
+  auto* group = tbar_->group_of(*this);
+  const bool handled =
+      group ? tbar_->handle_drop(*dragged_id, *group, id_) : tbar_->reorder_task(*dragged_id, id_);
+  if (!handled) {
     spdlog::debug("Ignoring stale taskbar drag from task {} to task {}", *dragged_id, id_);
   }
+}
+
+void Task::move_to_workspace(const std::string& workspace_id) {
+  if (!workspace_obj_) {
+    spdlog::debug("{} cannot be moved: no lab_toplevel_workspace_v1 object", repr());
+    return;
+  }
+  spdlog::debug("{} requesting move to workspace '{}'", repr(), workspace_id);
+  lab_toplevel_workspace_v1_move_to_workspace(workspace_obj_, workspace_id.c_str());
 }
 
 bool Task::operator==(const Task& o) const { return o.id_ == id_; }
@@ -846,7 +859,7 @@ Taskbar::Taskbar(const std::string& id, const waybar::Bar& bar, const Json::Valu
     box_.set_hexpand(true);
     other_group_ = std::make_unique<Group>(bar.orientation, nullptr, show_labels_);
     other_group_->label.set_label(other_label_);
-    watch_group_size(*other_group_);
+    connect_group(*other_group_);
     box_.pack_start(other_group_->frame, true, true);
   }
 
@@ -1120,9 +1133,11 @@ void Taskbar::register_toplevel_workspace_manager(struct wl_registry* registry, 
     return;
   }
 
-  (void)version;
+  /* Version 2 adds move_to_workspace (drag a button onto another workspace box). */
+  toplevel_workspace_version_ = std::min<uint32_t>(version, 2);
   toplevel_workspace_manager_ = static_cast<struct lab_toplevel_workspace_manager_v1*>(
-      wl_registry_bind(registry, name, &lab_toplevel_workspace_manager_v1_interface, 1));
+      wl_registry_bind(registry, name, &lab_toplevel_workspace_manager_v1_interface,
+                       toplevel_workspace_version_));
   for (auto& task : tasks_) {
     task->bind_workspace_object();
   }
@@ -1368,10 +1383,53 @@ Taskbar::Group* Taskbar::group_of(const Task& task) {
   return nullptr;
 }
 
-void Taskbar::watch_group_size(Group& group) {
+void Taskbar::connect_group(Group& group) {
   group.icon_size = max_icon_size_;
   group.clip.signal_size_allocate().connect_notify(
       [this, &group](Gtk::Allocation& allocation) { fit_group_icons(group, allocation); });
+
+  /* Dropping a button on the empty area (or the label) of a box. */
+  group.frame.drag_dest_set(target_entries, Gtk::DEST_DEFAULT_ALL, Gdk::ACTION_MOVE);
+  group.frame.signal_drag_data_received().connect(
+      [this, &group](const Glib::RefPtr<Gdk::DragContext>&, int, int,
+                     const Gtk::SelectionData& selection_data, guint, guint) {
+        auto dragged_id =
+            dnd::decode_task_id(selection_data.get_data(), selection_data.get_length());
+        if (!dragged_id) {
+          spdlog::warn("Ignoring malformed taskbar drag payload");
+          return;
+        }
+        if (!handle_drop(*dragged_id, group, std::nullopt)) {
+          spdlog::debug("Ignoring taskbar drop of task {} on a workspace box", *dragged_id);
+        }
+      });
+}
+
+bool Taskbar::handle_drop(uint32_t dragged_id, Group& destination,
+                          std::optional<uint32_t> destination_task_id) {
+  const auto dragged_it =
+      std::find_if(tasks_.begin(), tasks_.end(),
+                   [dragged_id](const auto& task) { return task->id() == dragged_id; });
+  if (dragged_it == tasks_.end()) {
+    return false;
+  }
+  auto& dragged = **dragged_it;
+
+  const bool same_group = group_of(dragged) == &destination;
+  const bool destination_is_other = destination.workspace == nullptr;
+  const bool can_move = toplevel_workspace_version_ >= 2 && !destination_is_other &&
+                        !destination.workspace->id.empty();
+  switch (dnd::drop_action(same_group, destination_is_other, can_move)) {
+    case dnd::DropAction::Reorder:
+      /* Dropped on its own box's empty area: nothing to do. */
+      return destination_task_id ? reorder_task(dragged_id, *destination_task_id) : true;
+    case dnd::DropAction::Move:
+      dragged.move_to_workspace(destination.workspace->id);
+      return true;
+    case dnd::DropAction::None:
+      break;
+  }
+  return false;
 }
 
 /* Called while GTK allocates: only decide here, reload icons from an idle callback. The
@@ -1400,8 +1458,9 @@ void Taskbar::fit_group_icons(Group& group, const Gtk::Allocation& allocation) {
   const int wanted = groups::fit_icon_size(available, members.size(), overhead, max_icon_size_,
                                            min_icon_size_);
 
-  const bool stale = std::any_of(members.begin(), members.end(),
-                                 [wanted](const Task* task) { return task->icon_size() != wanted; });
+  const bool stale = std::any_of(members.begin(), members.end(), [wanted](const Task* task) {
+    return task->icon_size() != wanted;
+  });
   if (wanted == group.icon_size && !stale) {
     return;
   }
@@ -1484,7 +1543,7 @@ void Taskbar::rebuild_groups() {
       activate_workspace(*state);
       return true;
     });
-    watch_group_size(*group);
+    connect_group(*group);
     box_.pack_start(group->frame, true, true);
     workspace->group = std::move(group);
   }

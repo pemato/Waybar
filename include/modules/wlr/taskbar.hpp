@@ -13,6 +13,7 @@
 
 #include <map>
 #include <memory>
+#include <optional>
 #include <ranges>
 #include <string>
 #include <unordered_set>
@@ -126,6 +127,7 @@ class Task {
   void bind_workspace_object();
   int icon_size() const { return icon_size_; }
   void set_icon_size(int size);
+  void move_to_workspace(const std::string& workspace_id);
   void handle_workspace_enter(const char* id);
   void handle_workspace_leave(const char* id);
 
@@ -213,6 +215,7 @@ class Taskbar : public waybar::AModule {
   struct zwlr_foreign_toplevel_manager_v1* manager_;
   struct ext_workspace_manager_v1* workspace_manager_;
   struct lab_toplevel_workspace_manager_v1* toplevel_workspace_manager_ = nullptr;
+  uint32_t toplevel_workspace_version_ = 0;
   struct wl_seat* seat_;
   std::vector<struct ext_workspace_group_handle_v1*> workspace_groups_;
   std::vector<std::unique_ptr<WorkspaceState>> workspaces_;
@@ -250,7 +253,9 @@ class Taskbar : public waybar::AModule {
   Gtk::Box& container_for(const Task&);
   Group* group_of(const Task&);
   void activate_workspace(WorkspaceState&);
-  void watch_group_size(Group&);
+  void connect_group(Group&);
+  bool handle_drop(uint32_t dragged_id, Group& destination,
+                   std::optional<uint32_t> destination_task_id);
   void fit_group_icons(Group&, const Gtk::Allocation&);
   void apply_group_icon_size(Group*);
   void place_task(Task&);
