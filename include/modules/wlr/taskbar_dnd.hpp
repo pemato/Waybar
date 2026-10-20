@@ -33,4 +33,15 @@ inline std::optional<std::pair<std::size_t, std::size_t>> reorder_positions(
   return std::pair{*dragged_position, *destination_position};
 }
 
+enum class DropAction { None, Reorder, Move };
+
+// What dropping a task button does: within its own box it reorders; onto another
+// workspace's box it moves the window there, if the compositor supports that; onto the
+// "other" box it does nothing.
+inline DropAction drop_action(bool same_group, bool destination_is_other, bool can_move) {
+  if (same_group) return DropAction::Reorder;
+  if (destination_is_other) return DropAction::None;
+  return can_move ? DropAction::Move : DropAction::None;
+}
+
 }  // namespace waybar::modules::wlr::dnd

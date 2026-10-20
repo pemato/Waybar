@@ -45,3 +45,22 @@ TEST_CASE("taskbar drag ignores tasks that are no longer live") {
   REQUIRE_FALSE(waybar::modules::wlr::dnd::reorder_positions(task_ids, 20, 30));
   REQUIRE_FALSE(waybar::modules::wlr::dnd::reorder_positions(task_ids, 10, 20));
 }
+
+namespace dnd = waybar::modules::wlr::dnd;
+
+TEST_CASE("test_drop_action_same_group_reorders") {
+  REQUIRE(dnd::drop_action(true, false, true) == dnd::DropAction::Reorder);
+  REQUIRE(dnd::drop_action(true, true, false) == dnd::DropAction::Reorder);
+}
+
+TEST_CASE("test_drop_action_other_box_ignored") {
+  REQUIRE(dnd::drop_action(false, true, true) == dnd::DropAction::None);
+}
+
+TEST_CASE("test_drop_action_no_move_without_v2") {
+  REQUIRE(dnd::drop_action(false, false, false) == dnd::DropAction::None);
+}
+
+TEST_CASE("test_drop_action_moves_across_groups") {
+  REQUIRE(dnd::drop_action(false, false, true) == dnd::DropAction::Move);
+}

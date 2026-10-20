@@ -37,4 +37,16 @@ inline std::vector<std::size_t> workspace_order(
   return order;
 }
 
+// Returns the icon size that lets count buttons fit side by side in available pixels,
+// where each button needs overhead pixels besides its icon. The result stays within
+// [min_size, max_size] (min_size is capped at max_size) and is never below 1. An empty
+// box, or one not allocated yet, keeps max_size.
+inline int fit_icon_size(int available, std::size_t count, int overhead, int max_size,
+                         int min_size) {
+  if (count == 0 || available <= 0) return max_size;
+  min_size = std::min(min_size, max_size);
+  const int fitting = available / static_cast<int>(count) - overhead;
+  return std::max(std::clamp(fitting, min_size, max_size), 1);
+}
+
 }  // namespace waybar::modules::wlr::groups
