@@ -4,9 +4,11 @@
 #include <glibmm/refptr.h>
 #include <gtkmm/box.h>
 #include <gtkmm/button.h>
+#include <gtkmm/eventbox.h>
 #include <gtkmm/icontheme.h>
 #include <gtkmm/image.h>
 #include <gtkmm/label.h>
+#include <gtkmm/scrolledwindow.h>
 #include <wayland-client.h>
 
 #include <map>
@@ -163,12 +165,22 @@ using TaskPtr = std::unique_ptr<Task>;
 
 class Taskbar : public waybar::AModule {
  public:
-  /* One box of the "group-by-workspace" view: a label followed by task buttons.
-   * The buttons are owned by their Task, never by the group. */
+  struct WorkspaceState;
+
+  /* One box of the "group-by-workspace" view: an optional label followed by the task
+   * buttons. The buttons sit in a scrolled window that never scrolls: it only clips them
+   * and keeps the group's minimum size independent of how many buttons it holds, so all
+   * groups keep an equal share of the module. The buttons are owned by their Task, never
+   * by the group. */
   struct Group {
-    explicit Group(Gtk::Orientation orientation) : box{orientation, 0} {}
-    Gtk::Box box;
-    Gtk::Button label;
+    Group(Gtk::Orientation orientation, WorkspaceState* workspace, bool show_label);
+    Gtk::EventBox frame;       // hit area for clicks and drops
+    Gtk::Box box;              // .workspace
+    Gtk::Button label;         // .workspace-label, packed only when labels are shown
+    Gtk::ScrolledWindow clip;  // clips overflowing buttons
+    Gtk::Box tasks;            // .workspace-tasks, holds the task buttons
+    WorkspaceState* workspace;  // nullptr for the "other" group
+    int icon_size = 0;
   };
 
   struct WorkspaceState {
@@ -204,6 +216,7 @@ class Taskbar : public waybar::AModule {
   struct ext_workspace_handle_v1* current_workspace_ = nullptr;
 
   bool group_by_workspace_ = false;
+  bool show_labels_ = true;
   std::string other_label_;
   std::unique_ptr<Group> other_group_;
 
@@ -230,6 +243,8 @@ class Taskbar : public waybar::AModule {
   bool reorder_task(uint32_t dragged_id, uint32_t destination_id);
   void remove_button(Task&);
   Gtk::Box& container_for(const Task&);
+  Group* group_of(const Task&);
+  void activate_workspace(WorkspaceState&);
   void place_task(Task&);
   void rebuild_groups();
   void remove_task(uint32_t);

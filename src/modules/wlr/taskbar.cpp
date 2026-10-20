@@ -5,6 +5,7 @@
 #include <gio/gdesktopappinfo.h>
 #include <giomm/desktopappinfo.h>
 #include <gtkmm/icontheme.h>
+#include <gtkmm/viewport.h>
 #include <spdlog/spdlog.h>
 
 #include <algorithm>
@@ -748,6 +749,39 @@ static void handle_global_remove(void* data, struct wl_registry* registry, uint3
 static const wl_registry_listener registry_listener_impl = {.global = handle_global,
                                                             .global_remove = handle_global_remove};
 
+Taskbar::Group::Group(Gtk::Orientation orientation, WorkspaceState* workspace, bool show_label)
+    : box{orientation, 0}, tasks{orientation, 0}, workspace{workspace} {
+  const bool horizontal = orientation == Gtk::ORIENTATION_HORIZONTAL;
+  clip.set_policy(horizontal ? Gtk::POLICY_EXTERNAL : Gtk::POLICY_NEVER,
+                  horizontal ? Gtk::POLICY_NEVER : Gtk::POLICY_EXTERNAL);
+  clip.set_propagate_natural_width(false);
+  clip.set_propagate_natural_height(false);
+  clip.set_shadow_type(Gtk::SHADOW_NONE);
+  clip.add(tasks);
+  if (auto* viewport = dynamic_cast<Gtk::Viewport*>(clip.get_child())) {
+    viewport->set_shadow_type(Gtk::SHADOW_NONE);
+  }
+  /* The window must never scroll: swallow wheel events before the scrolled window sees them. */
+  clip.signal_scroll_event().connect([](GdkEventScroll*) { return true; }, false);
+
+  label.set_relief(Gtk::RELIEF_NONE);
+  label.get_style_context()->add_class("workspace-label");
+  box.get_style_context()->add_class("workspace");
+  box.get_style_context()->add_class("empty");
+  if (!workspace) {
+    box.get_style_context()->add_class("other");
+  }
+  tasks.get_style_context()->add_class("workspace-tasks");
+
+  if (show_label) {
+    box.pack_start(label, false, false);
+  }
+  box.pack_start(clip, true, true);
+  frame.set_visible_window(false);
+  frame.add(box);
+  frame.show_all();
+}
+
 Taskbar::Taskbar(const std::string& id, const waybar::Bar& bar, const Json::Value& config)
     : waybar::AModule(config, "taskbar", id, false, false),
       bar_(bar),
@@ -791,20 +825,14 @@ Taskbar::Taskbar(const std::string& id, const waybar::Bar& bar, const Json::Valu
       config_["group-by-workspace"].isBool() && config_["group-by-workspace"].asBool();
   other_label_ =
       config_["other-apps-label"].isString() ? config_["other-apps-label"].asString() : "other";
+  show_labels_ =
+      !config_["show-workspace-labels"].isBool() || config_["show-workspace-labels"].asBool();
   if (group_by_workspace_) {
     box_.set_homogeneous(true);
     box_.set_hexpand(true);
-    other_group_ = std::make_unique<Group>(bar.orientation);
+    other_group_ = std::make_unique<Group>(bar.orientation, nullptr, show_labels_);
     other_group_->label.set_label(other_label_);
-    other_group_->label.set_relief(Gtk::RELIEF_NONE);
-    other_group_->label.get_style_context()->add_class("workspace-label");
-    other_group_->box.get_style_context()->add_class("workspace");
-    other_group_->box.get_style_context()->add_class("other");
-    other_group_->box.get_style_context()->add_class("empty");
-    other_group_->box.pack_start(other_group_->label, false, false);
-    box_.pack_start(other_group_->box, true, true);
-    other_group_->label.show();
-    other_group_->box.show();
+    box_.pack_start(other_group_->frame, true, true);
   }
 
   struct wl_display* display = Client::inst()->wl_display;
@@ -1186,14 +1214,13 @@ void Taskbar::handle_workspace_removed(struct ext_workspace_handle_v1* handle) {
     if (auto& group = (*workspace)->group) {
       // Never destroy a button together with the box, even if two handles share an id.
       if (other_group_) {
-        for (auto* child : group->box.get_children()) {
-          if (child == &group->label) continue;
-          group->box.remove(*child);
-          other_group_->box.pack_start(*child, false, false);
+        for (auto* child : group->tasks.get_children()) {
+          group->tasks.remove(*child);
+          other_group_->tasks.pack_start(*child, false, false);
         }
         refresh_empty_classes();
       }
-      box_.remove(group->box);
+      box_.remove(group->frame);
     }
     ext_workspace_handle_v1_destroy((*workspace)->handle);
     workspaces_.erase(workspace);
@@ -1291,7 +1318,7 @@ Gtk::Box& Taskbar::container_for(const Task& task) {
     }
   }
   if (task_key.empty()) {
-    return other_group_->box;
+    return other_group_->tasks;
   }
 
   const auto ordered = ordered_grouped_workspaces();
@@ -1302,9 +1329,36 @@ Gtk::Box& Taskbar::container_for(const Task& task) {
   }
   const auto index = groups::group_index(ids, task_key);
   if (index >= ordered.size()) {
-    return other_group_->box;
+    return other_group_->tasks;
   }
-  return ordered[index]->group->box;
+  return ordered[index]->group->tasks;
+}
+
+Taskbar::Group* Taskbar::group_of(const Task& task) {
+  if (!group_by_workspace_) {
+    return nullptr;
+  }
+  const auto* parent = task.button.get_parent();
+  if (!parent) {
+    return nullptr;
+  }
+  if (parent == &other_group_->tasks) {
+    return other_group_.get();
+  }
+  for (auto& workspace : workspaces_) {
+    if (workspace->group && parent == &workspace->group->tasks) {
+      return workspace->group.get();
+    }
+  }
+  return nullptr;
+}
+
+void Taskbar::activate_workspace(WorkspaceState& workspace) {
+  if (!workspace_manager_) {
+    return;
+  }
+  ext_workspace_handle_v1_activate(workspace.handle);
+  ext_workspace_manager_v1_commit(workspace_manager_);
 }
 
 void Taskbar::refresh_empty_classes() {
@@ -1313,8 +1367,7 @@ void Taskbar::refresh_empty_classes() {
   }
   bool any_task = false;
   const auto refresh = [&any_task](Group& group) {
-    /* The label is the first child; everything after it is a task button. */
-    const bool empty = group.box.get_children().size() <= 1;
+    const bool empty = group.tasks.get_children().empty();
     any_task = any_task || !empty;
     auto style = group.box.get_style_context();
     if (empty && !style->has_class("empty")) {
@@ -1346,39 +1399,35 @@ void Taskbar::rebuild_groups() {
     if (workspace->group || (workspace->name.empty() && workspace->id.empty())) {
       continue;
     }
-    auto group = std::make_unique<Group>(bar_.orientation);
-    group->label.set_relief(Gtk::RELIEF_NONE);
-    group->label.get_style_context()->add_class("workspace-label");
-    group->box.get_style_context()->add_class("workspace");
-    group->box.get_style_context()->add_class("empty");
-    auto* handle = workspace->handle;
-    group->label.signal_clicked().connect([this, handle] {
-      if (!workspace_manager_) {
-        return;
+    auto group = std::make_unique<Group>(bar_.orientation, workspace.get(), show_labels_);
+    auto* state = workspace.get();
+    group->label.signal_clicked().connect([this, state] { activate_workspace(*state); });
+    /* Clicking the empty area of a box switches too, so the label can be hidden. */
+    group->frame.add_events(Gdk::BUTTON_RELEASE_MASK);
+    group->frame.signal_button_release_event().connect([this, state](GdkEventButton* event) {
+      if (event->button != 1) {
+        return false;
       }
-      ext_workspace_handle_v1_activate(handle);
-      ext_workspace_manager_v1_commit(workspace_manager_);
+      activate_workspace(*state);
+      return true;
     });
-    group->box.pack_start(group->label, false, false);
-    box_.pack_start(group->box, true, true);
-    group->label.show();
-    group->box.show();
+    box_.pack_start(group->frame, true, true);
     workspace->group = std::move(group);
   }
 
   /* Order the boxes (coordinates if any, else announcement order), "other" last. */
   const auto ordered = ordered_grouped_workspaces();
   int position = 0;
-  const auto place_at = [this, &position](Gtk::Box& box) {
+  const auto place_at = [this, &position](Gtk::Widget& box) {
     if (box_.child_property_position(box).get_value() != position) {
       box_.reorder_child(box, position);
     }
     ++position;
   };
   for (auto* workspace : ordered) {
-    place_at(workspace->group->box);
+    place_at(workspace->group->frame);
   }
-  place_at(other_group_->box);
+  place_at(other_group_->frame);
 
   /* Labels (renames) and the active workspace. */
   for (auto* workspace : ordered) {
@@ -1406,10 +1455,6 @@ void Taskbar::move_button(Task& task, int pos) {
   auto* parent = dynamic_cast<Gtk::Box*>(task.button.get_parent());
   if (!parent) {
     return;
-  }
-  /* In a workspace box the label is the first child; positions count buttons. */
-  if (parent != &box_) {
-    ++pos;
   }
   parent->reorder_child(task.button, pos);
 }

@@ -71,8 +71,10 @@ Addressed by *wlr/taskbar*
 	If set to true, task buttons are arranged in one box per workspace, each
 	headed by a clickable workspace label, followed by a trailing "other" box
 	for applications whose workspace is unknown. Clicking a workspace label
-	switches to that workspace. All boxes get an equal share of the module's
-	width (or height on a vertical bar). In this mode the module requests
+	switches to that workspace, as does clicking the empty area of a box. All
+	boxes get an equal share of the module's width (or height on a vertical
+	bar) regardless of their contents; buttons that do not fit are clipped at
+	the box edge (see *min-icon-size*). In this mode the module requests
 	horizontal expansion, but the bar only gives it extra space when one of the
 	bar's *expand-left*, *expand-center* or *expand-right* options is set for
 	its section; on a vertical bar the same applies to the height. Clicking the
@@ -86,6 +88,13 @@ Addressed by *wlr/taskbar*
 	default: other ++
 	The label of the trailing box holding applications whose workspace is
 	unknown. Only used with *group-by-workspace*.
+
+*show-workspace-labels*: ++
+	typeof: bool ++
+	default: true ++
+	With *group-by-workspace*, whether each box starts with its workspace
+	name. Clicking the empty area of a box switches to that workspace, so the
+	label can be hidden without losing the switcher. Ignored otherwise.
 
 *sort-by-app-id*: ++
 	typeof: bool ++
@@ -232,6 +241,7 @@ With *group-by-workspace*:
   buttons are hidden by *active-only* is not marked *empty*.
 - *#taskbar .workspace.other*: the trailing box of applications with unknown workspace
 - *#taskbar .workspace-label*: the clickable workspace label
+- *#taskbar .workspace-tasks*: the row of task buttons inside a box
 
 # Workspace membership
 
