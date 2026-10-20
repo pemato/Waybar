@@ -78,6 +78,9 @@ Addressed by *wlr/taskbar*
 	evenly, keeping their size, later buttons drawn over earlier ones. On labwc (protocol version 2) a task
 	button can be dragged onto another workspace's box, or onto a button in
 	it, to move that window there; the active workspace does not change.
+	While dragging, the button is shown in the box under the pointer; the
+	window moves when the button is released, and a cancelled drag leaves it
+	where it was.
 	Dropping on the "other" box does nothing. Within one box dragging still
 	reorders. To let the boxes fill the bar, set the module's *expand* option
 	and the bar's *expand-left*, *expand-center* or *expand-right* option for
@@ -246,6 +249,7 @@ With *group-by-workspace*:
 - *#taskbar .workspace.other*: the trailing box of applications with unknown workspace
 - *#taskbar .workspace-label*: the clickable workspace label
 - *#taskbar .workspace-tasks*: the row of task buttons inside a box
+- *#taskbar .drag-preview*: the dragged button as previewed in the box under the pointer
 
 # Workspace membership
 

@@ -207,6 +207,22 @@ Task::Task(const waybar::Bar& bar, const Json::Value& config, Taskbar* tbar,
   button.signal_drag_data_received().connect(sigc::mem_fun(*this, &Task::handle_drag_data_received),
                                              false);
 
+  /* Drag preview bookkeeping (grouped view only; see Taskbar::drag_hover). */
+  button.signal_drag_begin().connect(
+      [this](const Glib::RefPtr<Gdk::DragContext>&) { tbar_->drag_started(*this); });
+  button.signal_drag_end().connect(
+      [this](const Glib::RefPtr<Gdk::DragContext>&) { tbar_->drag_finished(*this); });
+  button.signal_drag_motion().connect(
+      [this](const Glib::RefPtr<Gdk::DragContext>&, int, int, guint) {
+        if (auto* group = tbar_->group_of(*this)) {
+          tbar_->drag_hover(*group);
+        }
+        return false;
+      },
+      false);
+  button.signal_drag_leave().connect(
+      [this](const Glib::RefPtr<Gdk::DragContext>&, guint) { tbar_->drag_left(); });
+
   /* Re-rasterize the icon if the bar ends up on an output with a different scale
    * than the one GTK guessed while the widget was not yet realized. */
   icon_.property_scale_factor().signal_changed().connect([this] {
@@ -642,6 +658,12 @@ void Task::handle_drag_data_received(const Glib::RefPtr<Gdk::DragContext>& conte
   }
 }
 
+void Task::load_icon_into(Gtk::Image& image) const {
+  if (!tbar_->icon_loader().image_load_icon(image, app_info_, icon_size_)) {
+    image.clear();
+  }
+}
+
 void Task::move_to_workspace(const std::string& workspace_id) {
   if (!workspace_obj_) {
     spdlog::debug("{} cannot be moved: no lab_toplevel_workspace_v1 object", repr());
@@ -831,6 +853,10 @@ Taskbar::Taskbar(const std::string& id, const waybar::Bar& bar, const Json::Valu
     box_.set_hexpand(true);
     other_group_ = std::make_unique<Group>(bar.orientation, nullptr, show_labels_);
     other_group_->label.set_label(other_label_);
+    drag_preview_.set_relief(Gtk::RELIEF_NONE);
+    drag_preview_.get_style_context()->add_class("drag-preview");
+    drag_preview_.add(drag_preview_icon_);
+    drag_preview_.show_all();
     connect_group(*other_group_);
     box_.pack_start(other_group_->frame, true, true);
   }
@@ -1214,6 +1240,9 @@ void Taskbar::handle_workspace_removed(struct ext_workspace_handle_v1* handle) {
                    [handle](const auto& workspace) { return workspace->handle == handle; });
   if (workspace != workspaces_.end()) {
     if (auto& group = (*workspace)->group) {
+      if (preview_group_ == group.get()) {
+        hide_preview();
+      }
       // Never destroy a button together with the box, even if two handles share an id.
       if (other_group_) {
         for (auto* child : group->tasks.get_children()) {
@@ -1357,6 +1386,14 @@ Taskbar::Group* Taskbar::group_of(const Task& task) {
 void Taskbar::connect_group(Group& group) {
   /* Dropping a button on the empty area (or the label) of a box. */
   group.frame.drag_dest_set(target_entries, Gtk::DEST_DEFAULT_ALL, Gdk::ACTION_MOVE);
+  group.frame.signal_drag_motion().connect(
+      [this, &group](const Glib::RefPtr<Gdk::DragContext>&, int, int, guint) {
+        drag_hover(group);
+        return false;
+      },
+      false);
+  group.frame.signal_drag_leave().connect(
+      [this](const Glib::RefPtr<Gdk::DragContext>&, guint) { drag_left(); });
   group.frame.signal_drag_data_received().connect(
       [this, &group](const Glib::RefPtr<Gdk::DragContext>&, int, int,
                      const Gtk::SelectionData& selection_data, guint, guint) {
@@ -1374,29 +1411,121 @@ void Taskbar::connect_group(Group& group) {
 
 bool Taskbar::handle_drop(uint32_t dragged_id, Group& destination,
                           std::optional<uint32_t> destination_task_id) {
-  const auto dragged_it =
-      std::find_if(tasks_.begin(), tasks_.end(),
-                   [dragged_id](const auto& task) { return task->id() == dragged_id; });
-  if (dragged_it == tasks_.end()) {
+  auto* dragged = find_task(dragged_id);
+  if (!dragged) {
     return false;
   }
-  auto& dragged = **dragged_it;
 
-  const bool same_group = group_of(dragged) == &destination;
+  const bool same_group = group_of(*dragged) == &destination;
   const bool destination_is_other = destination.workspace == nullptr;
-  const bool can_move = toplevel_workspace_version_ >= 2 && !destination_is_other &&
-                        !destination.workspace->id.empty();
-  switch (dnd::drop_action(same_group, destination_is_other, can_move)) {
+  switch (dnd::drop_action(same_group, destination_is_other, can_move_to(destination))) {
     case dnd::DropAction::Reorder:
       /* Dropped on its own box's empty area: nothing to do. */
       return destination_task_id ? reorder_task(dragged_id, *destination_task_id) : true;
-    case dnd::DropAction::Move:
-      dragged.move_to_workspace(destination.workspace->id);
+    case dnd::DropAction::Move: {
+      hide_preview();
+      dragged->move_to_workspace(destination.workspace->id);
+      /* Show the button in its new box at once, then re-sync with what labwc reports, so a
+       * refused move puts it back. */
+      if (auto* parent = dragged->button.get_parent()) {
+        parent->remove(dragged->button);
+      }
+      destination.tasks.pack(dragged->button);
+      refresh_empty_classes();
+      Glib::signal_timeout().connect_once(
+          [this, dragged_id] {
+            if (auto* task = find_task(dragged_id)) {
+              place_task(*task);
+            }
+          },
+          1000);
       return true;
+    }
     case dnd::DropAction::None:
       break;
   }
   return false;
+}
+
+Task* Taskbar::find_task(uint32_t id) {
+  auto it = std::find_if(tasks_.begin(), tasks_.end(),
+                         [id](const auto& task) { return task->id() == id; });
+  return it == tasks_.end() ? nullptr : it->get();
+}
+
+bool Taskbar::can_move_to(const Group& group) const {
+  return toplevel_workspace_version_ >= 2 && group.workspace && !group.workspace->id.empty();
+}
+
+void Taskbar::drag_started(Task& task) {
+  if (group_by_workspace_) {
+    dragging_id_ = task.id();
+  }
+}
+
+void Taskbar::drag_finished(Task& task) {
+  /* After a drop or a cancelled drag: the button shows in its box again. */
+  hide_preview();
+  if (dragging_id_ == task.id()) {
+    dragging_id_.reset();
+  }
+}
+
+void Taskbar::drag_hover(Group& group) {
+  preview_clear_.disconnect();
+  auto* dragged = dragging_id_ ? find_task(*dragging_id_) : nullptr;
+  if (!dragged) {
+    return;
+  }
+  const bool same_group = group_of(*dragged) == &group;
+  if (dnd::drop_action(same_group, group.workspace == nullptr, can_move_to(group)) ==
+      dnd::DropAction::Move) {
+    show_preview(*dragged, group);
+  } else {
+    hide_preview();
+  }
+}
+
+void Taskbar::drag_left() {
+  /* Moving between a box and a button inside it leaves one and enters the other; only
+   * drop the preview if no hover follows shortly. */
+  preview_clear_.disconnect();
+  preview_clear_ = Glib::signal_timeout().connect(
+      [this] {
+        hide_preview();
+        return false;
+      },
+      100);
+}
+
+void Taskbar::show_preview(Task& dragged, Group& group) {
+  if (preview_group_ == &group) {
+    return;
+  }
+  if (preview_group_) {
+    preview_group_->tasks.remove(drag_preview_);
+  } else {
+    dragged.load_icon_into(drag_preview_icon_);
+  }
+  group.tasks.pack(drag_preview_);
+  preview_group_ = &group;
+  preview_task_id_ = dragged.id();
+  dragged.button.hide();
+}
+
+void Taskbar::hide_preview() {
+  preview_clear_.disconnect();
+  if (!preview_group_) {
+    return;
+  }
+  preview_group_->tasks.remove(drag_preview_);
+  preview_group_ = nullptr;
+  if (auto* task = preview_task_id_ ? find_task(*preview_task_id_) : nullptr) {
+    if (task->visible()) {
+      task->button.show();
+    }
+  }
+  preview_task_id_.reset();
 }
 
 void Taskbar::activate_workspace(WorkspaceState& workspace) {
@@ -1552,6 +1681,12 @@ void Taskbar::remove_task(uint32_t id) {
     return;
   }
 
+  if (preview_task_id_ == id) {
+    hide_preview();
+  }
+  if (dragging_id_ == id) {
+    dragging_id_.reset();
+  }
   tasks_.erase(it);
   update_bar_css_classes();
 }

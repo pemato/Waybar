@@ -126,6 +126,7 @@ class Task {
   const std::string& workspace_id() const { return workspace_id_; }
   void bind_workspace_object();
   void move_to_workspace(const std::string& workspace_id);
+  void load_icon_into(Gtk::Image& image) const;
   void handle_workspace_enter(const char* id);
   void handle_workspace_leave(const char* id);
 
@@ -221,6 +222,15 @@ class Taskbar : public waybar::AModule {
   std::string other_label_;
   std::unique_ptr<Group> other_group_;
 
+  /* Drag preview: while a button is dragged over another workspace's box, it is hidden
+   * and drag_preview_ (showing its icon) is shown in that box instead. */
+  std::optional<uint32_t> dragging_id_;
+  std::optional<uint32_t> preview_task_id_;
+  Group* preview_group_ = nullptr;
+  Gtk::Image drag_preview_icon_;
+  Gtk::Button drag_preview_;
+  sigc::connection preview_clear_;
+
  public:
   /* Callbacks for global registration */
   void register_manager(struct wl_registry*, uint32_t name, uint32_t version);
@@ -249,6 +259,10 @@ class Taskbar : public waybar::AModule {
   void connect_group(Group&);
   bool handle_drop(uint32_t dragged_id, Group& destination,
                    std::optional<uint32_t> destination_task_id);
+  void drag_started(Task&);
+  void drag_finished(Task&);
+  void drag_hover(Group&);
+  void drag_left();
   void place_task(Task&);
   void rebuild_groups();
   void remove_task(uint32_t);
@@ -279,6 +293,10 @@ class Taskbar : public waybar::AModule {
   void pack_button(Task&);
   void refresh_empty_classes();
   std::vector<WorkspaceState*> ordered_grouped_workspaces() const;
+  Task* find_task(uint32_t id);
+  bool can_move_to(const Group&) const;
+  void show_preview(Task& dragged, Group& group);
+  void hide_preview();
 };
 
 } /* namespace waybar::modules::wlr */
