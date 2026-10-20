@@ -1,5 +1,7 @@
 #include "modules/wlr/taskbar_overlap_box.hpp"
 
+#include <gtkmm/button.h>
+
 #include <algorithm>
 
 #include "modules/wlr/taskbar_groups.hpp"
@@ -139,6 +141,18 @@ void OverlapBox::on_size_allocate(Gtk::Allocation& allocation) {
       child_allocation.set_height(sizes[index]);
     }
     visible[index]->size_allocate(child_allocation);
+  }
+
+  /* Clicks go to the topmost input window, and mapping a button (show, re-parent) raises
+   * its window. Restack them in drawing order so that where buttons overlap, the one
+   * drawn on top is the one that gets the click. */
+  for (auto* child : visible) {
+    auto* button = dynamic_cast<Gtk::Button*>(child);
+    if (button && button->get_realized()) {
+      if (GdkWindow* input = gtk_button_get_event_window(button->gobj())) {
+        gdk_window_raise(input);
+      }
+    }
   }
 }
 

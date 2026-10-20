@@ -13,8 +13,10 @@ test_src = files(
     'config.cpp',
     'taskbar_dnd.cpp',
     'taskbar_groups.cpp',
+    'taskbar_overlap_box.cpp',
     'fit_label.cpp',
     '../src/config.cpp',
+    '../src/modules/wlr/taskbar_overlap_box.cpp',
 )
 
 waybar_test = executable(
