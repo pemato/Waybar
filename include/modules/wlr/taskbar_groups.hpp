@@ -37,16 +37,29 @@ inline std::vector<std::size_t> workspace_order(
   return order;
 }
 
-// Returns the icon size that lets count buttons fit side by side in available pixels,
-// where each button needs overhead pixels besides its icon. The result stays within
-// [min_size, max_size] (min_size is capped at max_size) and is never below 1. An empty
-// box, or one not allocated yet, keeps max_size.
-inline int fit_icon_size(int available, std::size_t count, int overhead, int max_size,
-                         int min_size) {
-  if (count == 0 || available <= 0) return max_size;
-  min_size = std::min(min_size, max_size);
-  const int fitting = available / static_cast<int>(count) - overhead;
-  return std::max(std::clamp(fitting, min_size, max_size), 1);
+// Returns where each of a row of children starts along the row, given their sizes and
+// the space available. Children that fit are placed side by side; otherwise they overlap
+// with an even step so that the last child ends exactly at the end of the space (or all
+// start at 0 when even one child does not fit).
+inline std::vector<int> overlap_offsets(int available, const std::vector<int>& sizes) {
+  std::vector<int> offsets;
+  offsets.reserve(sizes.size());
+  const int total = std::accumulate(sizes.begin(), sizes.end(), 0);
+  if (total <= available) {
+    int offset = 0;
+    for (int size : sizes) {
+      offsets.push_back(offset);
+      offset += size;
+    }
+    return offsets;
+  }
+  const int count = static_cast<int>(sizes.size());
+  if (count == 1) return {0};
+  const int span = std::max(available - sizes.back(), 0);
+  for (int index = 0; index < count; ++index) {
+    offsets.push_back(index * span / (count - 1));
+  }
+  return offsets;
 }
 
 }  // namespace waybar::modules::wlr::groups

@@ -297,7 +297,7 @@ endif
 
 if true
     add_project_arguments('-DHAVE_WLR_TASKBAR', language: 'cpp')
-    src_files += files('src/modules/wlr/taskbar.cpp')
+    src_files += files('src/modules/wlr/taskbar.cpp', 'src/modules/wlr/taskbar_overlap_box.cpp')
     man_files += files('man/waybar-wlr-taskbar.5.scd')
 endif
 

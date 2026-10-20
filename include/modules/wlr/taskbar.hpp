@@ -8,7 +8,6 @@
 #include <gtkmm/icontheme.h>
 #include <gtkmm/image.h>
 #include <gtkmm/label.h>
-#include <gtkmm/scrolledwindow.h>
 #include <wayland-client.h>
 
 #include <map>
@@ -25,6 +24,7 @@
 #include "ext-workspace-v1-client-protocol.h"
 #include "giomm/desktopappinfo.h"
 #include "lab-toplevel-workspace-v1-client-protocol.h"
+#include "modules/wlr/taskbar_overlap_box.hpp"
 #include "util/icon_loader.hpp"
 #include "util/json.hpp"
 #include "wlr-foreign-toplevel-management-unstable-v1-client-protocol.h"
@@ -125,8 +125,6 @@ class Task {
   void set_workspace(struct ext_workspace_handle_v1* workspace) { workspace_ = workspace; }
   const std::string& workspace_id() const { return workspace_id_; }
   void bind_workspace_object();
-  int icon_size() const { return icon_size_; }
-  void set_icon_size(int size);
   void move_to_workspace(const std::string& workspace_id);
   void handle_workspace_enter(const char* id);
   void handle_workspace_leave(const char* id);
@@ -173,19 +171,16 @@ class Taskbar : public waybar::AModule {
   struct WorkspaceState;
 
   /* One box of the "group-by-workspace" view: an optional label followed by the task
-   * buttons. The buttons sit in a scrolled window that never scrolls: it only clips them
-   * and keeps the group's minimum size independent of how many buttons it holds, so all
-   * groups keep an equal share of the module. The buttons are owned by their Task, never
-   * by the group. */
+   * buttons. The buttons sit in an OverlapBox, which never asks for more room than one
+   * button, so all groups keep an equal share of the module whatever they hold. The
+   * buttons are owned by their Task, never by the group. */
   struct Group {
     Group(Gtk::Orientation orientation, WorkspaceState* workspace, bool show_label);
-    Gtk::EventBox frame;       // hit area for clicks and drops
-    Gtk::Box box;              // .workspace
-    Gtk::Button label;         // .workspace-label, packed only when labels are shown
-    Gtk::ScrolledWindow clip;  // clips overflowing buttons
-    Gtk::Box tasks;            // .workspace-tasks, holds the task buttons
+    Gtk::EventBox frame;        // hit area for clicks and drops
+    Gtk::Box box;               // .workspace
+    Gtk::Button label;          // .workspace-label, packed only when labels are shown
+    OverlapBox tasks;           // .workspace-tasks, holds the task buttons
     WorkspaceState* workspace;  // nullptr for the "other" group
-    int icon_size = 0;
   };
 
   struct WorkspaceState {
@@ -223,8 +218,6 @@ class Taskbar : public waybar::AModule {
 
   bool group_by_workspace_ = false;
   bool show_labels_ = true;
-  int max_icon_size_ = 16;
-  int min_icon_size_ = 16;
   std::string other_label_;
   std::unique_ptr<Group> other_group_;
 
@@ -250,14 +243,12 @@ class Taskbar : public waybar::AModule {
   void move_button(Task&, int);
   bool reorder_task(uint32_t dragged_id, uint32_t destination_id);
   void remove_button(Task&);
-  Gtk::Box& container_for(const Task&);
+  Gtk::Container& container_for(const Task&);
   Group* group_of(const Task&);
   void activate_workspace(WorkspaceState&);
   void connect_group(Group&);
   bool handle_drop(uint32_t dragged_id, Group& destination,
                    std::optional<uint32_t> destination_task_id);
-  void fit_group_icons(Group&, const Gtk::Allocation&);
-  void apply_group_icon_size(Group*);
   void place_task(Task&);
   void rebuild_groups();
   void remove_task(uint32_t);

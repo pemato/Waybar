@@ -39,13 +39,6 @@ Addressed by *wlr/taskbar*
 	default: 16 ++
 	The size of the icon.
 
-*min-icon-size*: ++
-	typeof: integer ++
-	default: same as icon-size ++
-	With *group-by-workspace*, icons in a crowded box shrink from *icon-size*
-	down to this size so more buttons fit; buttons that still do not fit are
-	clipped at the box edge. Ignored otherwise.
-
 *markup*: ++
 	typeof: bool ++
 	default: false ++
@@ -80,8 +73,9 @@ Addressed by *wlr/taskbar*
 	for applications whose workspace is unknown. Clicking a workspace label
 	switches to that workspace, as does clicking the empty area of a box. All
 	boxes get an equal share of the module's width (or height on a vertical
-	bar) regardless of their contents; buttons that do not fit are clipped at
-	the box edge (see *min-icon-size*). On labwc (protocol version 2) a task
+	bar) regardless of their contents. New buttons are added after the
+	existing ones; when a box's buttons do not fit side by side they overlap
+	evenly, keeping their size, later buttons drawn over earlier ones. On labwc (protocol version 2) a task
 	button can be dragged onto another workspace's box, or onto a button in
 	it, to move that window there; the active workspace does not change.
 	Dropping on the "other" box does nothing. Within one box dragging still

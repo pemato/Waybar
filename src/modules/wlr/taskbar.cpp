@@ -5,7 +5,6 @@
 #include <gio/gdesktopappinfo.h>
 #include <giomm/desktopappinfo.h>
 #include <gtkmm/icontheme.h>
-#include <gtkmm/viewport.h>
 #include <spdlog/spdlog.h>
 
 #include <algorithm>
@@ -229,16 +228,6 @@ static const struct lab_toplevel_workspace_v1_listener lab_toplevel_workspace_im
     .workspace_enter = lab_ws_enter,
     .workspace_leave = lab_ws_leave,
 };
-
-void Task::set_icon_size(int size) {
-  if (size == icon_size_) {
-    return;
-  }
-  icon_size_ = size;
-  if (with_icon_ && tbar_->icon_loader().image_load_icon(icon_, app_info_, icon_size_)) {
-    icon_.show();
-  }
-}
 
 void Task::bind_workspace_object() {
   auto* mgr = tbar_->toplevel_workspace_manager();
@@ -773,20 +762,7 @@ static const wl_registry_listener registry_listener_impl = {.global = handle_glo
                                                             .global_remove = handle_global_remove};
 
 Taskbar::Group::Group(Gtk::Orientation orientation, WorkspaceState* workspace, bool show_label)
-    : box{orientation, 0}, tasks{orientation, 0}, workspace{workspace} {
-  const bool horizontal = orientation == Gtk::ORIENTATION_HORIZONTAL;
-  clip.set_policy(horizontal ? Gtk::POLICY_EXTERNAL : Gtk::POLICY_NEVER,
-                  horizontal ? Gtk::POLICY_NEVER : Gtk::POLICY_EXTERNAL);
-  clip.set_propagate_natural_width(false);
-  clip.set_propagate_natural_height(false);
-  clip.set_shadow_type(Gtk::SHADOW_NONE);
-  clip.add(tasks);
-  if (auto* viewport = dynamic_cast<Gtk::Viewport*>(clip.get_child())) {
-    viewport->set_shadow_type(Gtk::SHADOW_NONE);
-  }
-  /* The window must never scroll: swallow wheel events before the scrolled window sees them. */
-  clip.signal_scroll_event().connect([](GdkEventScroll*) { return true; }, false);
-
+    : box{orientation, 0}, tasks{orientation}, workspace{workspace} {
   label.set_relief(Gtk::RELIEF_NONE);
   label.get_style_context()->add_class("workspace-label");
   box.get_style_context()->add_class("workspace");
@@ -799,7 +775,7 @@ Taskbar::Group::Group(Gtk::Orientation orientation, WorkspaceState* workspace, b
   if (show_label) {
     box.pack_start(label, false, false);
   }
-  box.pack_start(clip, true, true);
+  box.pack_start(tasks, true, true);
   frame.set_visible_window(false);
   frame.add(box);
   frame.show_all();
@@ -850,10 +826,6 @@ Taskbar::Taskbar(const std::string& id, const waybar::Bar& bar, const Json::Valu
       config_["other-apps-label"].isString() ? config_["other-apps-label"].asString() : "other";
   show_labels_ =
       !config_["show-workspace-labels"].isBool() || config_["show-workspace-labels"].asBool();
-  max_icon_size_ = config_["icon-size"].isInt() ? config_["icon-size"].asInt() : 16;
-  min_icon_size_ =
-      config_["min-icon-size"].isInt() ? config_["min-icon-size"].asInt() : max_icon_size_;
-  min_icon_size_ = std::clamp(min_icon_size_, 1, std::max(max_icon_size_, 1));
   if (group_by_workspace_) {
     box_.set_homogeneous(true);
     box_.set_hexpand(true);
@@ -1246,7 +1218,7 @@ void Taskbar::handle_workspace_removed(struct ext_workspace_handle_v1* handle) {
       if (other_group_) {
         for (auto* child : group->tasks.get_children()) {
           group->tasks.remove(*child);
-          other_group_->tasks.pack_start(*child, false, false);
+          other_group_->tasks.pack(*child);
         }
         refresh_empty_classes();
       }
@@ -1262,7 +1234,7 @@ void Taskbar::handle_workspace_removed(struct ext_workspace_handle_v1* handle) {
 void Taskbar::add_button(Task& task) { pack_button(task); }
 
 void Taskbar::pack_button(Task& task) {
-  Gtk::Box& target = container_for(task);
+  Gtk::Container& target = container_for(task);
   Gtk::Button& bt = task.button;
   auto* parent = bt.get_parent();
   if (parent == &target) {
@@ -1274,9 +1246,8 @@ void Taskbar::pack_button(Task& task) {
   }
 
   if (group_by_workspace_) {
-    /* Inside a workspace box the buttons pack at the start and do not stretch, so
-     * the boxes keep their equal share of the bar whatever they hold. */
-    target.pack_start(bt, false, false);
+    /* Appended after the buttons already in the box (left-aligned row). */
+    static_cast<OverlapBox&>(target).pack(bt);
     refresh_empty_classes();
     return;
   }
@@ -1333,7 +1304,7 @@ static std::string group_key(const Taskbar::WorkspaceState& workspace) {
   return fmt::format("\x1f{}", static_cast<const void*>(workspace.handle));
 }
 
-Gtk::Box& Taskbar::container_for(const Task& task) {
+Gtk::Container& Taskbar::container_for(const Task& task) {
   if (!group_by_workspace_) {
     return box_;
   }
@@ -1384,10 +1355,6 @@ Taskbar::Group* Taskbar::group_of(const Task& task) {
 }
 
 void Taskbar::connect_group(Group& group) {
-  group.icon_size = max_icon_size_;
-  group.clip.signal_size_allocate().connect_notify(
-      [this, &group](Gtk::Allocation& allocation) { fit_group_icons(group, allocation); });
-
   /* Dropping a button on the empty area (or the label) of a box. */
   group.frame.drag_dest_set(target_entries, Gtk::DEST_DEFAULT_ALL, Gdk::ACTION_MOVE);
   group.frame.signal_drag_data_received().connect(
@@ -1430,59 +1397,6 @@ bool Taskbar::handle_drop(uint32_t dragged_id, Group& destination,
       break;
   }
   return false;
-}
-
-/* Called while GTK allocates: only decide here, reload icons from an idle callback. The
- * group's size does not depend on its buttons, so the reload cannot feed back into it. */
-void Taskbar::fit_group_icons(Group& group, const Gtk::Allocation& allocation) {
-  const bool horizontal = bar_.orientation == Gtk::ORIENTATION_HORIZONTAL;
-  std::vector<Task*> members;
-  for (auto& task : tasks_) {
-    if (task->visible() && group_of(*task) == &group) {
-      members.push_back(task.get());
-    }
-  }
-  if (members.empty()) {
-    return;
-  }
-
-  int minimum = 0;
-  int natural = 0;
-  if (horizontal) {
-    members.front()->button.get_preferred_width(minimum, natural);
-  } else {
-    members.front()->button.get_preferred_height(minimum, natural);
-  }
-  const int overhead = std::max(natural - members.front()->icon_size(), 0);
-  const int available = horizontal ? allocation.get_width() : allocation.get_height();
-  const int wanted = groups::fit_icon_size(available, members.size(), overhead, max_icon_size_,
-                                           min_icon_size_);
-
-  const bool stale = std::any_of(members.begin(), members.end(), [wanted](const Task* task) {
-    return task->icon_size() != wanted;
-  });
-  if (wanted == group.icon_size && !stale) {
-    return;
-  }
-  group.icon_size = wanted;
-  auto* target = &group;
-  Glib::signal_idle().connect_once([this, target] { apply_group_icon_size(target); });
-}
-
-void Taskbar::apply_group_icon_size(Group* group) {
-  /* The group may have been destroyed (workspace removed) since the callback was queued. */
-  bool alive = group == other_group_.get();
-  for (const auto& workspace : workspaces_) {
-    alive = alive || workspace->group.get() == group;
-  }
-  if (!alive) {
-    return;
-  }
-  for (auto& task : tasks_) {
-    if (group_of(*task) == group) {
-      task->set_icon_size(group->icon_size);
-    }
-  }
 }
 
 void Taskbar::activate_workspace(WorkspaceState& workspace) {
@@ -1585,11 +1499,11 @@ void Taskbar::rebuild_groups() {
 }
 
 void Taskbar::move_button(Task& task, int pos) {
-  auto* parent = dynamic_cast<Gtk::Box*>(task.button.get_parent());
-  if (!parent) {
-    return;
+  if (auto* box = dynamic_cast<Gtk::Box*>(task.button.get_parent())) {
+    box->reorder_child(task.button, pos);
+  } else if (auto* row = dynamic_cast<OverlapBox*>(task.button.get_parent())) {
+    row->reorder_child(task.button, pos);
   }
-  parent->reorder_child(task.button, pos);
 }
 
 bool Taskbar::reorder_task(uint32_t dragged_id, uint32_t destination_id) {
@@ -1605,13 +1519,16 @@ bool Taskbar::reorder_task(uint32_t dragged_id, uint32_t destination_id) {
   auto* destination = tasks_[positions->second].get();
   if (dragged == destination) return true;
   /* Reordering is only supported within one container (one workspace box). */
-  auto* parent = dynamic_cast<Gtk::Box*>(destination->button.get_parent());
+  auto* parent = destination->button.get_parent();
   if (!parent || dragged->button.get_parent() != parent) {
     return false;
   }
 
-  auto position = parent->child_property_position(destination->button).get_value();
-  parent->reorder_child(dragged->button, position);
+  if (auto* box = dynamic_cast<Gtk::Box*>(parent)) {
+    box->reorder_child(dragged->button, box->child_property_position(destination->button));
+  } else if (auto* row = dynamic_cast<OverlapBox*>(parent)) {
+    row->reorder_child(dragged->button, row->child_position(destination->button));
+  }
   return true;
 }
 
