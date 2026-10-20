@@ -95,6 +95,9 @@ Task::Task(const waybar::Bar& bar, const Json::Value& config, Taskbar* tbar,
       content_{bar.orientation, 0} {
   zwlr_foreign_toplevel_handle_v1_add_listener(handle_, &toplevel_handle_impl, this);
   bind_workspace_object();
+  if (config_["icon-size"].isInt()) {
+    icon_size_ = config_["icon-size"].asInt();
+  }
 
   button.set_relief(Gtk::RELIEF_NONE);
 
@@ -209,9 +212,8 @@ Task::Task(const waybar::Bar& bar, const Json::Value& config, Taskbar* tbar,
    * than the one GTK guessed while the widget was not yet realized. */
   icon_.property_scale_factor().signal_changed().connect([this] {
     if (!with_icon_) return;
-    int icon_size = config_["icon-size"].isInt() ? config_["icon-size"].asInt() : 16;
     spdlog::debug("Task ({}) scale factor changed, reloading icon", id_);
-    if (tbar_->icon_loader().image_load_icon(icon_, app_info_, icon_size)) icon_.show();
+    if (tbar_->icon_loader().image_load_icon(icon_, app_info_, icon_size_)) icon_.show();
   });
 }
 
@@ -227,6 +229,16 @@ static const struct lab_toplevel_workspace_v1_listener lab_toplevel_workspace_im
     .workspace_enter = lab_ws_enter,
     .workspace_leave = lab_ws_leave,
 };
+
+void Task::set_icon_size(int size) {
+  if (size == icon_size_) {
+    return;
+  }
+  icon_size_ = size;
+  if (with_icon_ && tbar_->icon_loader().image_load_icon(icon_, app_info_, icon_size_)) {
+    icon_.show();
+  }
+}
 
 void Task::bind_workspace_object() {
   auto* mgr = tbar_->toplevel_workspace_manager();
@@ -317,8 +329,7 @@ void Task::handle_title(const char* title) {
     return;
   }
 
-  int icon_size = config_["icon-size"].isInt() ? config_["icon-size"].asInt() : 16;
-  if (tbar_->icon_loader().image_load_icon(icon_, app_info_, icon_size))
+  if (tbar_->icon_loader().image_load_icon(icon_, app_info_, icon_size_))
     icon_.show();
   else
     spdlog::debug("Couldn't find icon for {}", title_);
@@ -390,8 +401,7 @@ void Task::handle_app_id(const char* app_id) {
     return;
   }
 
-  int icon_size = config_["icon-size"].isInt() ? config_["icon-size"].asInt() : 16;
-  if (tbar_->icon_loader().image_load_icon(icon_, app_info_, icon_size))
+  if (tbar_->icon_loader().image_load_icon(icon_, app_info_, icon_size_))
     icon_.show();
   else
     spdlog::debug("Couldn't find icon for {}", app_id_);
@@ -827,11 +837,16 @@ Taskbar::Taskbar(const std::string& id, const waybar::Bar& bar, const Json::Valu
       config_["other-apps-label"].isString() ? config_["other-apps-label"].asString() : "other";
   show_labels_ =
       !config_["show-workspace-labels"].isBool() || config_["show-workspace-labels"].asBool();
+  max_icon_size_ = config_["icon-size"].isInt() ? config_["icon-size"].asInt() : 16;
+  min_icon_size_ =
+      config_["min-icon-size"].isInt() ? config_["min-icon-size"].asInt() : max_icon_size_;
+  min_icon_size_ = std::clamp(min_icon_size_, 1, std::max(max_icon_size_, 1));
   if (group_by_workspace_) {
     box_.set_homogeneous(true);
     box_.set_hexpand(true);
     other_group_ = std::make_unique<Group>(bar.orientation, nullptr, show_labels_);
     other_group_->label.set_label(other_label_);
+    watch_group_size(*other_group_);
     box_.pack_start(other_group_->frame, true, true);
   }
 
@@ -1353,6 +1368,64 @@ Taskbar::Group* Taskbar::group_of(const Task& task) {
   return nullptr;
 }
 
+void Taskbar::watch_group_size(Group& group) {
+  group.icon_size = max_icon_size_;
+  group.clip.signal_size_allocate().connect_notify(
+      [this, &group](Gtk::Allocation& allocation) { fit_group_icons(group, allocation); });
+}
+
+/* Called while GTK allocates: only decide here, reload icons from an idle callback. The
+ * group's size does not depend on its buttons, so the reload cannot feed back into it. */
+void Taskbar::fit_group_icons(Group& group, const Gtk::Allocation& allocation) {
+  const bool horizontal = bar_.orientation == Gtk::ORIENTATION_HORIZONTAL;
+  std::vector<Task*> members;
+  for (auto& task : tasks_) {
+    if (task->visible() && group_of(*task) == &group) {
+      members.push_back(task.get());
+    }
+  }
+  if (members.empty()) {
+    return;
+  }
+
+  int minimum = 0;
+  int natural = 0;
+  if (horizontal) {
+    members.front()->button.get_preferred_width(minimum, natural);
+  } else {
+    members.front()->button.get_preferred_height(minimum, natural);
+  }
+  const int overhead = std::max(natural - members.front()->icon_size(), 0);
+  const int available = horizontal ? allocation.get_width() : allocation.get_height();
+  const int wanted = groups::fit_icon_size(available, members.size(), overhead, max_icon_size_,
+                                           min_icon_size_);
+
+  const bool stale = std::any_of(members.begin(), members.end(),
+                                 [wanted](const Task* task) { return task->icon_size() != wanted; });
+  if (wanted == group.icon_size && !stale) {
+    return;
+  }
+  group.icon_size = wanted;
+  auto* target = &group;
+  Glib::signal_idle().connect_once([this, target] { apply_group_icon_size(target); });
+}
+
+void Taskbar::apply_group_icon_size(Group* group) {
+  /* The group may have been destroyed (workspace removed) since the callback was queued. */
+  bool alive = group == other_group_.get();
+  for (const auto& workspace : workspaces_) {
+    alive = alive || workspace->group.get() == group;
+  }
+  if (!alive) {
+    return;
+  }
+  for (auto& task : tasks_) {
+    if (group_of(*task) == group) {
+      task->set_icon_size(group->icon_size);
+    }
+  }
+}
+
 void Taskbar::activate_workspace(WorkspaceState& workspace) {
   if (!workspace_manager_) {
     return;
@@ -1411,6 +1484,7 @@ void Taskbar::rebuild_groups() {
       activate_workspace(*state);
       return true;
     });
+    watch_group_size(*group);
     box_.pack_start(group->frame, true, true);
     workspace->group = std::move(group);
   }

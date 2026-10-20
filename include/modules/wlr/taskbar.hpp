@@ -80,6 +80,7 @@ class Task {
   bool size_allocate_connected_ = false;
 
   bool with_icon_ = false;
+  int icon_size_ = 16;
   bool with_name_ = false;
   std::string format_before_;
   std::string format_after_;
@@ -123,6 +124,8 @@ class Task {
   void set_workspace(struct ext_workspace_handle_v1* workspace) { workspace_ = workspace; }
   const std::string& workspace_id() const { return workspace_id_; }
   void bind_workspace_object();
+  int icon_size() const { return icon_size_; }
+  void set_icon_size(int size);
   void handle_workspace_enter(const char* id);
   void handle_workspace_leave(const char* id);
 
@@ -217,6 +220,8 @@ class Taskbar : public waybar::AModule {
 
   bool group_by_workspace_ = false;
   bool show_labels_ = true;
+  int max_icon_size_ = 16;
+  int min_icon_size_ = 16;
   std::string other_label_;
   std::unique_ptr<Group> other_group_;
 
@@ -245,6 +250,9 @@ class Taskbar : public waybar::AModule {
   Gtk::Box& container_for(const Task&);
   Group* group_of(const Task&);
   void activate_workspace(WorkspaceState&);
+  void watch_group_size(Group&);
+  void fit_group_icons(Group&, const Gtk::Allocation&);
+  void apply_group_icon_size(Group*);
   void place_task(Task&);
   void rebuild_groups();
   void remove_task(uint32_t);

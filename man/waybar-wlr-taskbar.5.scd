@@ -39,6 +39,13 @@ Addressed by *wlr/taskbar*
 	default: 16 ++
 	The size of the icon.
 
+*min-icon-size*: ++
+	typeof: integer ++
+	default: same as icon-size ++
+	With *group-by-workspace*, icons in a crowded box shrink from *icon-size*
+	down to this size so more buttons fit; buttons that still do not fit are
+	clipped at the box edge. Ignored otherwise.
+
 *markup*: ++
 	typeof: bool ++
 	default: false ++
