@@ -85,13 +85,12 @@ Addressed by *wlr/taskbar*
 	button can be dragged onto another workspace's box, or onto a button in
 	it, to move that window there; the active workspace does not change.
 	Dropping on the "other" box does nothing. Within one box dragging still
-	reorders. In this mode the module requests
-	horizontal expansion, but the bar only gives it extra space when one of the
-	bar's *expand-left*, *expand-center* or *expand-right* options is set for
-	its section; on a vertical bar the same applies to the height. Clicking the
-	"other" label does nothing. Combining this
-	option with *expand* is not specifically supported; buttons may stretch
-	within their boxes. Requires *ext-workspace-v1* for workspace boxes. See
+	reorders. To let the boxes fill the bar, set the module's *expand* option
+	and the bar's *expand-left*, *expand-center* or *expand-right* option for
+	its section; on a vertical bar the same applies to the height. Without
+	them the boxes are as small as their contents allow. In this mode *expand*
+	does not stretch the task buttons. Clicking the "other" label does
+	nothing. Requires *ext-workspace-v1* for workspace boxes. See
 	*Workspace membership* below.
 
 *other-apps-label*: ++
