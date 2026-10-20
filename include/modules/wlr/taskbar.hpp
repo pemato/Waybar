@@ -227,9 +227,9 @@ class Taskbar : public waybar::AModule {
   std::optional<uint32_t> dragging_id_;
   std::optional<uint32_t> preview_task_id_;
   Group* preview_group_ = nullptr;
+  Gtk::Widget* hovered_widget_ = nullptr;  // drop target the drag is over
   Gtk::Image drag_preview_icon_;
   Gtk::Button drag_preview_;
-  sigc::connection preview_clear_;
 
  public:
   /* Callbacks for global registration */
@@ -261,8 +261,8 @@ class Taskbar : public waybar::AModule {
                    std::optional<uint32_t> destination_task_id);
   void drag_started(Task&);
   void drag_finished(Task&);
-  void drag_hover(Group&);
-  void drag_left();
+  void drag_hover(Group&, Gtk::Widget& target);
+  void drag_left(Gtk::Widget& target);
   void place_task(Task&);
   void rebuild_groups();
   void remove_task(uint32_t);

@@ -215,13 +215,13 @@ Task::Task(const waybar::Bar& bar, const Json::Value& config, Taskbar* tbar,
   button.signal_drag_motion().connect(
       [this](const Glib::RefPtr<Gdk::DragContext>&, int, int, guint) {
         if (auto* group = tbar_->group_of(*this)) {
-          tbar_->drag_hover(*group);
+          tbar_->drag_hover(*group, button);
         }
         return false;
       },
       false);
   button.signal_drag_leave().connect(
-      [this](const Glib::RefPtr<Gdk::DragContext>&, guint) { tbar_->drag_left(); });
+      [this](const Glib::RefPtr<Gdk::DragContext>&, guint) { tbar_->drag_left(button); });
 
   /* Re-rasterize the icon if the bar ends up on an output with a different scale
    * than the one GTK guessed while the widget was not yet realized. */
@@ -1388,12 +1388,12 @@ void Taskbar::connect_group(Group& group) {
   group.frame.drag_dest_set(target_entries, Gtk::DEST_DEFAULT_ALL, Gdk::ACTION_MOVE);
   group.frame.signal_drag_motion().connect(
       [this, &group](const Glib::RefPtr<Gdk::DragContext>&, int, int, guint) {
-        drag_hover(group);
+        drag_hover(group, group.frame);
         return false;
       },
       false);
   group.frame.signal_drag_leave().connect(
-      [this](const Glib::RefPtr<Gdk::DragContext>&, guint) { drag_left(); });
+      [this, &group](const Glib::RefPtr<Gdk::DragContext>&, guint) { drag_left(group.frame); });
   group.frame.signal_drag_data_received().connect(
       [this, &group](const Glib::RefPtr<Gdk::DragContext>&, int, int,
                      const Gtk::SelectionData& selection_data, guint, guint) {
@@ -1465,14 +1465,15 @@ void Taskbar::drag_started(Task& task) {
 
 void Taskbar::drag_finished(Task& task) {
   /* After a drop or a cancelled drag: the button shows in its box again. */
+  hovered_widget_ = nullptr;
   hide_preview();
   if (dragging_id_ == task.id()) {
     dragging_id_.reset();
   }
 }
 
-void Taskbar::drag_hover(Group& group) {
-  preview_clear_.disconnect();
+void Taskbar::drag_hover(Group& group, Gtk::Widget& target) {
+  hovered_widget_ = &target;
   auto* dragged = dragging_id_ ? find_task(*dragging_id_) : nullptr;
   if (!dragged) {
     return;
@@ -1486,16 +1487,15 @@ void Taskbar::drag_hover(Group& group) {
   }
 }
 
-void Taskbar::drag_left() {
-  /* Moving between a box and a button inside it leaves one and enters the other; only
-   * drop the preview if no hover follows shortly. */
-  preview_clear_.disconnect();
-  preview_clear_ = Glib::signal_timeout().connect(
-      [this] {
-        hide_preview();
-        return false;
-      },
-      100);
+void Taskbar::drag_left(Gtk::Widget& target) {
+  /* GTK reports the motion over the new target before the leave of the old one, so a
+   * leave only ends the preview when it comes from the target last hovered, i.e. the
+   * drag left the taskbar. */
+  if (&target != hovered_widget_) {
+    return;
+  }
+  hovered_widget_ = nullptr;
+  hide_preview();
 }
 
 void Taskbar::show_preview(Task& dragged, Group& group) {
@@ -1514,7 +1514,6 @@ void Taskbar::show_preview(Task& dragged, Group& group) {
 }
 
 void Taskbar::hide_preview() {
-  preview_clear_.disconnect();
   if (!preview_group_) {
     return;
   }
