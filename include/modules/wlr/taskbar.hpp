@@ -95,6 +95,7 @@ class Task {
   struct ext_workspace_handle_v1* workspace_ = nullptr;
   struct lab_toplevel_workspace_v1* workspace_obj_ = nullptr;
   std::string workspace_id_;
+  sigc::connection leave_place_;  // re-places the button after a leave without an enter
 
   int32_t drag_start_x;
   int32_t drag_start_y;
@@ -223,8 +224,8 @@ class Taskbar : public waybar::AModule {
   std::string other_label_;
   std::unique_ptr<Group> other_group_;
 
-  /* Drag preview: while a button is dragged over another workspace's box, it is hidden
-   * and drag_preview_ (showing its icon) is shown in that box instead. */
+  /* Drag preview: while a button is dragged over a box it can be dropped on, it is hidden
+   * and drag_preview_ (showing its icon) is shown where the drop would put it. */
   std::optional<uint32_t> dragging_id_;
   std::optional<uint32_t> preview_task_id_;
   Group* preview_group_ = nullptr;
@@ -232,6 +233,8 @@ class Taskbar : public waybar::AModule {
   Gtk::Image drag_preview_icon_;
   Gtk::Button drag_preview_;
   sigc::connection resync_;  // re-places buttons from labwc's answer after a drop
+  sigc::connection leave_idle_;  // ends the preview once the drag left the taskbar
+  bool drop_pending_ = false;    // a drop happened; its data has not arrived yet
 
  public:
   /* Callbacks for global registration */
@@ -263,8 +266,9 @@ class Taskbar : public waybar::AModule {
                    std::optional<uint32_t> destination_task_id);
   void drag_started(Task&);
   void drag_finished(Task&);
-  void drag_hover(Group&, Gtk::Widget& target);
+  void drag_hover(Group&, Gtk::Widget& target, Task* hovered_task = nullptr);
   void drag_left(Gtk::Widget& target);
+  void drop_started() { drop_pending_ = true; }
   void place_task(Task&);
   void rebuild_groups();
   void remove_task(uint32_t);
@@ -297,7 +301,7 @@ class Taskbar : public waybar::AModule {
   std::vector<WorkspaceState*> ordered_grouped_workspaces() const;
   Task* find_task(uint32_t id);
   bool can_move_to(const Group&) const;
-  void show_preview(Task& dragged, Group& group);
+  void show_preview(Task& dragged, Group& group, Task* hovered_task);
   void hide_preview();
 };
 

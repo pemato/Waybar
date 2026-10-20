@@ -44,4 +44,10 @@ inline DropAction drop_action(bool same_group, bool destination_is_other, bool c
   return can_move ? DropAction::Move : DropAction::None;
 }
 
+// Where the dragged button goes once the drag preview at preview_index is removed from a
+// box, given the button's own index in that box (or -1 if it comes from another box).
+inline int drop_index(int preview_index, int dragged_index) {
+  return dragged_index >= 0 && dragged_index < preview_index ? preview_index - 1 : preview_index;
+}
+
 }  // namespace waybar::modules::wlr::dnd

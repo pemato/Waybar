@@ -215,13 +215,19 @@ Task::Task(const waybar::Bar& bar, const Json::Value& config, Taskbar* tbar,
   button.signal_drag_motion().connect(
       [this](const Glib::RefPtr<Gdk::DragContext>&, int, int, guint) {
         if (auto* group = tbar_->group_of(*this)) {
-          tbar_->drag_hover(*group, button);
+          tbar_->drag_hover(*group, button, this);
         }
         return false;
       },
       false);
   button.signal_drag_leave().connect(
       [this](const Glib::RefPtr<Gdk::DragContext>&, guint) { tbar_->drag_left(button); });
+  button.signal_drag_drop().connect(
+      [this](const Glib::RefPtr<Gdk::DragContext>&, int, int, guint) {
+        tbar_->drop_started();
+        return false;
+      },
+      false);
 
   /* Re-rasterize the icon if the bar ends up on an output with a different scale
    * than the one GTK guessed while the widget was not yet realized. */
@@ -256,6 +262,7 @@ void Task::bind_workspace_object() {
 
 void Task::handle_workspace_enter(const char* id) {
   spdlog::debug("{} entered workspace '{}'", repr(), id);
+  leave_place_.disconnect();
   workspace_id_ = id;
   workspace_ = tbar_->handle_for_id(workspace_id_);
   tbar_->place_task(*this);
@@ -269,12 +276,19 @@ void Task::handle_workspace_leave(const char* id) {
     workspace_id_.clear();
     workspace_ = nullptr;
   }
-  tbar_->place_task(*this);
-  tbar_->update_bar_css_classes();
-  tbar_->dp.emit();
+  /* A move to another workspace sends leave then enter: wait for the enter instead of
+   * passing through the "other" box, which would lose the button's place in the row. */
+  leave_place_.disconnect();
+  leave_place_ = Glib::signal_idle().connect([this] {
+    tbar_->place_task(*this);
+    tbar_->update_bar_css_classes();
+    tbar_->dp.emit();
+    return false;
+  });
 }
 
 Task::~Task() {
+  leave_place_.disconnect();
   if (workspace_obj_) {
     lab_toplevel_workspace_v1_destroy(workspace_obj_);
     workspace_obj_ = nullptr;
@@ -859,6 +873,32 @@ Taskbar::Taskbar(const std::string& id, const waybar::Bar& bar, const Json::Valu
     drag_preview_.get_style_context()->add_class("drag-preview");
     drag_preview_.add(drag_preview_icon_);
     drag_preview_.show_all();
+    /* The preview is a drop target too, so hovering it keeps it in place instead of
+     * reaching the frame or a button beneath it. */
+    drag_preview_.drag_dest_set(target_entries, Gtk::DEST_DEFAULT_ALL, Gdk::ACTION_MOVE);
+    drag_preview_.signal_drag_motion().connect(
+        [this](const Glib::RefPtr<Gdk::DragContext>&, int, int, guint) {
+          hovered_widget_ = &drag_preview_;
+          return false;
+        },
+        false);
+    drag_preview_.signal_drag_leave().connect(
+        [this](const Glib::RefPtr<Gdk::DragContext>&, guint) { drag_left(drag_preview_); });
+    drag_preview_.signal_drag_drop().connect(
+        [this](const Glib::RefPtr<Gdk::DragContext>&, int, int, guint) {
+          drop_started();
+          return false;
+        },
+        false);
+    drag_preview_.signal_drag_data_received().connect(
+        [this](const Glib::RefPtr<Gdk::DragContext>&, int, int,
+               const Gtk::SelectionData& selection_data, guint, guint) {
+          auto dragged_id =
+              dnd::decode_task_id(selection_data.get_data(), selection_data.get_length());
+          if (dragged_id && preview_group_) {
+            handle_drop(*dragged_id, *preview_group_, std::nullopt);
+          }
+        });
     connect_group(*other_group_);
     box_.pack_start(other_group_->frame, true, true);
   }
@@ -917,6 +957,7 @@ Taskbar::Taskbar(const std::string& id, const waybar::Bar& bar, const Json::Valu
 
 Taskbar::~Taskbar() {
   resync_.disconnect();
+  leave_idle_.disconnect();
   tasks_.clear();
   if (toplevel_workspace_manager_) {
     lab_toplevel_workspace_manager_v1_destroy(toplevel_workspace_manager_);
@@ -1397,6 +1438,12 @@ void Taskbar::connect_group(Group& group) {
       false);
   group.frame.signal_drag_leave().connect(
       [this, &group](const Glib::RefPtr<Gdk::DragContext>&, guint) { drag_left(group.frame); });
+  group.frame.signal_drag_drop().connect(
+      [this](const Glib::RefPtr<Gdk::DragContext>&, int, int, guint) {
+        drop_started();
+        return false;
+      },
+      false);
   group.frame.signal_drag_data_received().connect(
       [this, &group](const Glib::RefPtr<Gdk::DragContext>&, int, int,
                      const Gtk::SelectionData& selection_data, guint, guint) {
@@ -1421,10 +1468,25 @@ bool Taskbar::handle_drop(uint32_t dragged_id, Group& destination,
 
   const bool same_group = group_of(*dragged) == &destination;
   const bool destination_is_other = destination.workspace == nullptr;
+  /* The button goes where the preview shows it. */
+  const int preview_index =
+      preview_group_ == &destination ? destination.tasks.child_position(drag_preview_) : -1;
+  const int index =
+      dnd::drop_index(preview_index, destination.tasks.child_position(dragged->button));
   switch (dnd::drop_action(same_group, destination_is_other, can_move_to(destination))) {
     case dnd::DropAction::Reorder:
-      /* Dropped on its own box's empty area: nothing to do. */
-      return destination_task_id ? reorder_task(dragged_id, *destination_task_id) : true;
+      if (preview_index >= 0) {
+        hide_preview();
+        destination.tasks.reorder_child(dragged->button, index);
+        return true;
+      }
+      /* No preview: onto a button takes its place, onto the empty area goes last. */
+      if (destination_task_id) {
+        return reorder_task(dragged_id, *destination_task_id);
+      }
+      destination.tasks.reorder_child(dragged->button,
+                                      static_cast<int>(destination.tasks.get_children().size()));
+      return true;
     case dnd::DropAction::Move: {
       hide_preview();
       dragged->move_to_workspace(destination.workspace->id);
@@ -1434,6 +1496,9 @@ bool Taskbar::handle_drop(uint32_t dragged_id, Group& destination,
         parent->remove(dragged->button);
       }
       destination.tasks.pack(dragged->button);
+      if (preview_index >= 0) {
+        destination.tasks.reorder_child(dragged->button, index);
+      }
       refresh_empty_classes();
       resync_.disconnect();
       resync_ = Glib::signal_timeout().connect(
@@ -1465,28 +1530,31 @@ bool Taskbar::can_move_to(const Group& group) const {
 void Taskbar::drag_started(Task& task) {
   if (group_by_workspace_) {
     dragging_id_ = task.id();
+    drop_pending_ = false;
   }
 }
 
 void Taskbar::drag_finished(Task& task) {
   /* After a drop or a cancelled drag: the button shows in its box again. */
   hovered_widget_ = nullptr;
+  drop_pending_ = false;
+  leave_idle_.disconnect();
   hide_preview();
   if (dragging_id_ == task.id()) {
     dragging_id_.reset();
   }
 }
 
-void Taskbar::drag_hover(Group& group, Gtk::Widget& target) {
+void Taskbar::drag_hover(Group& group, Gtk::Widget& target, Task* hovered_task) {
   hovered_widget_ = &target;
   auto* dragged = dragging_id_ ? find_task(*dragging_id_) : nullptr;
   if (!dragged) {
     return;
   }
   const bool same_group = group_of(*dragged) == &group;
-  if (dnd::drop_action(same_group, group.workspace == nullptr, can_move_to(group)) ==
-      dnd::DropAction::Move) {
-    show_preview(*dragged, group);
+  if (dnd::drop_action(same_group, group.workspace == nullptr, can_move_to(group)) !=
+      dnd::DropAction::None) {
+    show_preview(*dragged, group, hovered_task);
   } else {
     hide_preview();
   }
@@ -1500,22 +1568,38 @@ void Taskbar::drag_left(Gtk::Widget& target) {
     return;
   }
   hovered_widget_ = nullptr;
-  hide_preview();
+  /* GTK also sends a leave right before a drop, and then looks up the drop target: keep
+   * the layout until then, and keep the preview for a drop, which places the button
+   * there once its data arrives. */
+  leave_idle_.disconnect();
+  leave_idle_ = Glib::signal_idle().connect([this] {
+    if (!hovered_widget_ && !drop_pending_) {
+      hide_preview();
+    }
+    return false;
+  });
 }
 
-void Taskbar::show_preview(Task& dragged, Group& group) {
-  if (preview_group_ == &group) {
-    return;
+void Taskbar::show_preview(Task& dragged, Group& group, Task* hovered_task) {
+  if (preview_group_ != &group) {
+    if (preview_group_) {
+      preview_group_->tasks.remove(drag_preview_);
+    } else {
+      dragged.load_icon_into(drag_preview_icon_);
+    }
+    group.tasks.pack(drag_preview_);
+    preview_group_ = &group;
+    preview_task_id_ = dragged.id();
+    dragged.button.hide();
   }
-  if (preview_group_) {
-    preview_group_->tasks.remove(drag_preview_);
-  } else {
-    dragged.load_icon_into(drag_preview_icon_);
+  /* At the hovered button's place, or last when over the box's empty area. */
+  int position = static_cast<int>(group.tasks.get_children().size()) - 1;
+  if (hovered_task && hovered_task->button.get_parent() == &group.tasks) {
+    position = group.tasks.child_position(hovered_task->button);
   }
-  group.tasks.pack(drag_preview_);
-  preview_group_ = &group;
-  preview_task_id_ = dragged.id();
-  dragged.button.hide();
+  if (group.tasks.child_position(drag_preview_) != position) {
+    group.tasks.reorder_child(drag_preview_, position);
+  }
 }
 
 void Taskbar::hide_preview() {

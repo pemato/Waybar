@@ -64,3 +64,17 @@ TEST_CASE("test_drop_action_no_move_without_v2") {
 TEST_CASE("test_drop_action_moves_across_groups") {
   REQUIRE(dnd::drop_action(false, false, true) == dnd::DropAction::Move);
 }
+
+TEST_CASE("test_drop_index_same_box") {
+  // [A, D, B, preview, C] -> D lands between B and C.
+  REQUIRE(dnd::drop_index(3, 1) == 2);
+  // [A, preview, B, D, C] -> D lands between A and B.
+  REQUIRE(dnd::drop_index(1, 3) == 1);
+  // The preview right after D: D stays where it was.
+  REQUIRE(dnd::drop_index(2, 1) == 1);
+}
+
+TEST_CASE("test_drop_index_from_other_box") {
+  REQUIRE(dnd::drop_index(0, -1) == 0);
+  REQUIRE(dnd::drop_index(2, -1) == 2);
+}
