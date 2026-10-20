@@ -96,6 +96,13 @@ Addressed by *wlr/taskbar*
 	The label of the trailing box holding applications whose workspace is
 	unknown. Only used with *group-by-workspace*.
 
+*hide-empty-other*: ++
+	typeof: bool ++
+	default: false ++
+	With *group-by-workspace*, hide the trailing "other" box while it holds no
+	task buttons. The workspace boxes then share its space, so they resize when
+	the "other" box appears or disappears. Ignored otherwise.
+
 *show-workspace-labels*: ++
 	typeof: bool ++
 	default: true ++

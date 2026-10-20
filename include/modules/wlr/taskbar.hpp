@@ -219,6 +219,7 @@ class Taskbar : public waybar::AModule {
 
   bool group_by_workspace_ = false;
   bool show_labels_ = true;
+  bool hide_empty_other_ = false;
   std::string other_label_;
   std::unique_ptr<Group> other_group_;
 

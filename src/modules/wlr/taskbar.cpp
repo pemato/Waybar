@@ -848,6 +848,8 @@ Taskbar::Taskbar(const std::string& id, const waybar::Bar& bar, const Json::Valu
       config_["other-apps-label"].isString() ? config_["other-apps-label"].asString() : "other";
   show_labels_ =
       !config_["show-workspace-labels"].isBool() || config_["show-workspace-labels"].asBool();
+  hide_empty_other_ =
+      config_["hide-empty-other"].isBool() && config_["hide-empty-other"].asBool();
   if (group_by_workspace_) {
     box_.set_homogeneous(true);
     box_.set_hexpand(true);
@@ -1559,6 +1561,9 @@ void Taskbar::refresh_empty_classes() {
     }
   }
   refresh(*other_group_);
+  // Hidden boxes take no share of the homogeneous row.
+  other_group_->frame.set_visible(!hide_empty_other_ ||
+                                  !other_group_->tasks.get_children().empty());
   if (any_task) {
     box_.get_style_context()->remove_class("empty");
   } else {
