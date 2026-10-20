@@ -914,6 +914,7 @@ Taskbar::Taskbar(const std::string& id, const waybar::Bar& bar, const Json::Valu
 }
 
 Taskbar::~Taskbar() {
+  resync_.disconnect();
   tasks_.clear();
   if (toplevel_workspace_manager_) {
     lab_toplevel_workspace_manager_v1_destroy(toplevel_workspace_manager_);
@@ -1432,11 +1433,13 @@ bool Taskbar::handle_drop(uint32_t dragged_id, Group& destination,
       }
       destination.tasks.pack(dragged->button);
       refresh_empty_classes();
-      Glib::signal_timeout().connect_once(
-          [this, dragged_id] {
-            if (auto* task = find_task(dragged_id)) {
+      resync_.disconnect();
+      resync_ = Glib::signal_timeout().connect(
+          [this] {
+            for (auto& task : tasks_) {
               place_task(*task);
             }
+            return false;
           },
           1000);
       return true;

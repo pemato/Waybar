@@ -230,6 +230,7 @@ class Taskbar : public waybar::AModule {
   Gtk::Widget* hovered_widget_ = nullptr;  // drop target the drag is over
   Gtk::Image drag_preview_icon_;
   Gtk::Button drag_preview_;
+  sigc::connection resync_;  // re-places buttons from labwc's answer after a drop
 
  public:
   /* Callbacks for global registration */
